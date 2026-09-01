@@ -29,12 +29,14 @@ class _FakeConnection:
         return self.cur
 
 
-def test_bookmaker_names_are_normalised_on_the_way_out() -> None:
-    conn = _FakeConnection([("msport", b"{}"), ("bet9ja", b"{}")])
+def test_bronze_bookmaker_names_are_returned_unchanged() -> None:
+    # Bronze is downstream of arbibet-markets' alias map, so its spelling is
+    # already canonical. The reader must not invent a second vocabulary.
+    conn = _FakeConnection([("msport", b"{}"), ("ilotbet", b"{}")])
 
     result = latest_payloads(conn, uuid4())  # type: ignore[arg-type]
 
-    assert set(result) == {"msports", "bet9ja"}
+    assert set(result) == {"msport", "ilotbet"}
 
 
 def test_payload_bytes_are_returned_verbatim() -> None:

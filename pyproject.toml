@@ -7,8 +7,14 @@ name = "arbibet-capstone"
 version = "0.0.0"
 description = "Ironhack DE capstone — reads the Arbibet markets bronze layer."
 requires-python = ">=3.12"
+
 dependencies = [
     "psycopg[binary]>=3.2,<4",
+    "pandas==2.2.3",
+    "numpy==2.1.2",
+    "confluent-kafka>=2.5,<3",
+    "snowflake-connector-python>=3.12,<4",
+    "openai>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +31,8 @@ where = ["src"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
+# Same reasoning as the mypy override below: vendored, not authored here.
+extend-exclude = ["src/arbibet_capstone/crosswalk"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "W"]
@@ -35,6 +43,18 @@ strict = true
 files = ["src", "tests"]
 explicit_package_bases = true
 mypy_path = "src"
+
+# The vendored engine (parsers + arbitrage) is ported code, not code this repo
+# authored. It is excluded from the strict budget rather than annotated: typing
+# it would mean rewriting it, and a rewrite is exactly what porting avoids.
+# Everything this repo *does* author stays under strict.
+[[tool.mypy.overrides]]
+module = "arbibet_capstone.crosswalk.*"
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["pandas", "pandas.*", "numpy", "numpy.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
