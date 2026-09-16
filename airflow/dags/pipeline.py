@@ -4,12 +4,12 @@
       load_dims ── producer ─┬─ arb ─┬─ extract_ticks ── track_arbitrage ─┐
                              └─ ev ──┴─ live_state ───────────────────────┤
       ingest_slips ───────────────────────────────────────────────────────┴─ dbt_run
-      dbt_run ── dbt_test ─┬─ brief_fixtures
-                           ├─ summarise_upcoming
-                           └─ summarise_results
+      dbt_run ── dbt_test ─┬─ brief_fixtures ─────┐
+                           ├─ summarise_upcoming ─┼─ publish
+                           └─ summarise_results ──┘
 
     HISTORY  daily at 06:00 -- expensive, and yesterday's answer is fine
-      flatten ── settle ── dbt_run ── dbt_test ── summarise_played
+      flatten ── settle ── dbt_run ── dbt_test ── summarise_played ── publish_archive
 
 WHY TWO DAGS
 ------------
@@ -198,6 +198,13 @@ with DAG(
     [track_arbitrage, live_state, ingest_slips] >> signals_dbt_run
     signals_dbt_run >> signals_dbt_test >> [brief_fixtures, summarise_upcoming, summarise_results]
 
+    # The web app's data: one snapshot per run, while the warehouse is still
+    # awake from the steps above, so visitors never query Snowflake. all_done,
+    # not all_success: a failed summary should not freeze the site on an older
+    # snapshot of everything else.
+    publish = _py("publish", "publish/snapshot.py", trigger_rule="all_done")
+    [brief_fixtures, summarise_upcoming, summarise_results] >> publish
+
 
 with DAG(
     dag_id="arbibet_history",
@@ -238,5 +245,11 @@ with DAG(
     )
 
 
+    # Rewrites the last three archived days of deep dives, so post-match notes
+    # written after a day was first archived still reach the site.
+    publish_archive = _py(
+        "publish_archive", "publish/snapshot.py --archive-recent", trigger_rule="all_done"
+    )
+
     flatten >> settle >> history_dbt_run
-    history_dbt_run >> history_dbt_test >> summarise_played
+    history_dbt_run >> history_dbt_test >> summarise_played >> publish_archive

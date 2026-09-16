@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+/* Dark mode follows the system, overridable by the toggle (html.dark / html.light). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-2: #f1f3f6;
+  --border: #e3e6eb;
+  --text: #0f172a;
+  --muted: #5b6474;
+  --faint: #8a93a3;
+  --accent: #2563eb;
+  --accent-soft: #e8efff;
+  --good: #047857;
+  --good-soft: #e3f6ee;
+  --bad: #b91c1c;
+  --bad-soft: #fdeaea;
+  --warn: #a16207;
+  --warn-soft: #fdf3dc;
+  color-scheme: light;
+}
+
+.dark {
+  --bg: #0b0f17;
+  --surface: #121824;
+  --surface-2: #19202e;
+  --border: #262f40;
+  --text: #e6e9ef;
+  --muted: #9aa4b5;
+  --faint: #6d7789;
+  --accent: #6d9bff;
+  --accent-soft: #1b2744;
+  --good: #34d399;
+  --good-soft: #0f2b22;
+  --bad: #f87171;
+  --bad-soft: #321718;
+  --warn: #fbbf24;
+  --warn-soft: #2e2410;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--good);
+  --color-good-soft: var(--good-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-feature-settings: "tnum" 1, "cv11" 1;
+}
+
+/* Collapsible sections: no default disclosure triangle. */
+details > summary {
+  list-style: none;
+}
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.prose-summary p + p {
+  margin-top: 0.6rem;
+}
+.prose-summary strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+input[type="range"] {
+  accent-color: var(--accent);
+}
