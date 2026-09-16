@@ -16,7 +16,7 @@ from datetime import UTC, datetime
 
 from arbibet_capstone.env import load as load_env
 from arbibet_capstone.slips import SOURCE, Settings, fetch_slips, open_client, payload_hash
-from arbibet_capstone.warehouse import connect, merge
+from arbibet_capstone.warehouse import connect, merge_bulk
 
 load_env()
 
@@ -93,7 +93,9 @@ def main() -> int:
             != (r["payload_hash"], r["followed_times"])
         ]
         written = (
-            merge(warehouse, table=TABLE, rows=changed, key=KEY, json_columns=JSON_COLUMNS)
+            merge_bulk(
+                warehouse, table=TABLE, rows=changed, key=KEY, json_columns=JSON_COLUMNS
+            )
             if changed
             else 0
         )

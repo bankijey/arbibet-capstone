@@ -137,21 +137,32 @@ def _connect() -> Any:
 _EXPIRED_TOKEN = "390114"
 
 
-# Snowflake stamps `last_altered` on every table it writes, and reading it is a
-# METADATA query -- it does not resume the warehouse and does not bill compute.
-# So this is the cheapest possible answer to "has anything changed since I last
-# looked", which is the question the whole cache turns on.
+# "Has anything changed since I last looked" is the question the whole cache
+# turns on, so it must be FREE. It was not: the first version read
+# INFORMATION_SCHEMA.TABLES, which needs a running warehouse. Asked every 30
+# seconds by every open dashboard, it kept COMPUTE_WH from ever suspending --
+# the largest single reason the account billed around the clock in Sep 2026.
 #
-# It moves when a pipeline task writes and sits still when nothing does; both
-# were checked against a live consumer run. Every other query is keyed on its
-# value, so a write anywhere in CORE or ANALYTICS invalidates the page and
-# nothing else does. That is what lets the DAG run every thirty minutes without
-# the dashboard either going stale or re-querying on a timer for no reason.
-_WATERMARK = """
-    SELECT max(last_altered) AS mark
-    FROM ARBIBET_CAPSTONE.INFORMATION_SCHEMA.TABLES
-    WHERE table_schema IN ('CORE', 'ANALYTICS')
-"""
+# Both statements below run on cloud services alone, with no warehouse: SHOW
+# lists the tables, and SYSTEM$LAST_CHANGE_COMMIT_TIME reads each one's last
+# commit from metadata. Checked with a session whose warehouse did not exist.
+# The views the pages read sit on these tables, so a write under any of them
+# moves the mark.
+_TABLES = "SHOW TERSE TABLES IN DATABASE ARBIBET_CAPSTONE"
+_SCHEMAS = ("CORE", "ANALYTICS")
+
+
+def _last_commit_sql(cur: Any) -> str:
+    cur.execute(_TABLES)
+    names = [
+        f'"{db}"."{schema}"."{name}"'
+        for _created, name, _kind, db, schema in cur.fetchall()
+        if schema in _SCHEMAS
+    ]
+    commits = ", ".join(
+        f"COALESCE(SYSTEM$LAST_CHANGE_COMMIT_TIME('{n}'), 0)" for n in names
+    )
+    return f"SELECT GREATEST(0, {commits})"
 
 
 @st.cache_data(ttl=WATERMARK_TTL, show_spinner=False)
@@ -163,9 +174,7 @@ def watermark() -> str:
     `CACHE_TTL`, which is how this behaved before the watermark existed.
     """
     try:
-        with connection().cursor() as cur:
-            cur.execute(_WATERMARK)
-            return str(cur.fetchone()[0])
+        return _read_watermark()
     except Exception:
         return "unavailable"
 
@@ -233,7 +242,10 @@ def query(sql: str, *, stable: bool = False) -> pd.DataFrame:
 # derived computation -- against the NEW mark, before anyone asks. A visitor
 # then lands on a warm cache.
 _RECENT: dict[str, float] = {}
-_RECENT_WINDOW = 6 * 3600
+# Only queries someone asked for in the last half hour are re-warmed. Warming
+# does run on the warehouse, so a page nobody is reading should not keep
+# paying for it.
+_RECENT_WINDOW = 30 * 60
 _WARMERS: dict[str, Callable[[str], object]] = {}
 
 
@@ -244,7 +256,7 @@ def register_warmer(name: str, fn: Callable[[str], object]) -> None:
 
 def _read_watermark() -> str:
     with connection().cursor() as cur:
-        cur.execute(_WATERMARK)
+        cur.execute(_last_commit_sql(cur))
         return str(cur.fetchone()[0])
 
 
@@ -300,9 +312,11 @@ def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
 def warehouse_written() -> str:
     """The watermark, for showing a reader why the page says what it says."""
     mark = watermark()
-    if mark in ("unavailable", "None"):
+    if not mark.isdigit() or mark == "0":
         return "unknown"
-    return str(mark)[:16].replace("T", " ")
+    # The mark is a commit time in nanoseconds since the epoch.
+    at = pd.Timestamp(int(mark), unit="ns", tz="UTC").tz_convert(TIMEZONE)
+    return f"{at:%Y-%m-%d %H:%M}"
 
 
 def is_upcoming(kickoffs: pd.Series) -> pd.Series:

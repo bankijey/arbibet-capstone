@@ -40,7 +40,7 @@ from arbibet_capstone.fixture_brief import (
     build_prompt,
     needs_rewrite,
 )
-from arbibet_capstone.warehouse import connect, merge
+from arbibet_capstone.warehouse import connect, merge_bulk
 
 load_env()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -321,10 +321,10 @@ def main() -> int:
             )
 
         if written:
-            # `merge`, not `merge_bulk`: this writes at most a dozen rows and
-            # one of them is a VARIANT. `merge_bulk` stages through pandas,
-            # which has nowhere to put a nested value.
-            merge(
+            # One staged MERGE for the whole run. Row-at-a-time `merge` was
+            # about a second per brief, and with deep dives plus signalled
+            # fixtures a run writes dozens.
+            merge_bulk(
                 warehouse,
                 table=TABLE,
                 rows=written,

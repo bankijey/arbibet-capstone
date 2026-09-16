@@ -1,6 +1,6 @@
 """The capstone's two DAGs.
 
-    SIGNALS  every 30 min -- the paths that must be fresh
+    SIGNALS  hourly -- the paths that must be fresh
       load_dims ── producer ─┬─ arb ─┬─ extract_ticks ── track_arbitrage ─┐
                              └─ ev ──┴─ live_state ───────────────────────┤
       ingest_slips ───────────────────────────────────────────────────────┴─ dbt_run
@@ -135,8 +135,12 @@ def _dbt(task_id: str, command: str) -> BashOperator:
 
 with DAG(
     dag_id="arbibet_signals",
-    description="Pre-kickoff arbitrage and EV, every 30 minutes.",
-    schedule="*/30 * * * *",
+    description="Pre-kickoff arbitrage and EV, hourly.",
+    # Hourly, not every 30 minutes. A run holds the warehouse for several
+    # minutes and it bills per second while running plus a minute idle; at
+    # half-hourly the runs plus dashboard checks kept COMPUTE_WH awake around
+    # the clock, about 55 USD a day of trial credit on 15-16 Sep 2026.
+    schedule="0 * * * *",
     tags=["capstone", "signals"],
     **_COMMON,  # type: ignore[arg-type]
 ) as signals:
@@ -175,11 +179,11 @@ with DAG(
         env={**PY_ENV, "SUMMARISE_SCOPE": "upcoming", "SUMMARISE_LIMIT": "60"},
     )
 
-    # Every 30 minutes now, not daily: the surebet and EV cards show the LATEST
+    # Every signals run, not daily: the surebet and EV cards show the LATEST
     # odds and where each tracked arbitrage stands, and a daily extraction left
     # "latest" up to a day old -- 4 of the 5 surebet markets signalled after
     # one day's extraction had no price history at all. Both are incremental
-    # (cursor + seed), so a half-hourly run replays only what bronze wrote since.
+    # (cursor + seed), so each run replays only what bronze wrote since.
     # After the consumers, so a market signalled in this run is tracked in it.
     extract_ticks = _py("extract_ticks", "odds/ticks.py")
     track_arbitrage = _py("track_arbitrage", "odds/arbitrage_track.py")
@@ -226,7 +230,7 @@ with DAG(
     history_dbt_run = _dbt("dbt_run", "run")
     history_dbt_test = _dbt("dbt_test", "test")
 
-    # Played slips only; upcoming ones are the signals DAG's, every 30 minutes.
+    # Played slips only; upcoming ones are the signals DAG's, hourly.
     summarise_played = _py(
         "summarise_played",
         "enrich/summarise.py",

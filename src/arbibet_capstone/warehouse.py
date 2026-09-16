@@ -214,6 +214,7 @@ def merge_bulk(
     rows: Sequence[Mapping[str, Any]],
     key: Sequence[str],
     keep: Sequence[str] = (),
+    json_columns: Collection[str] = (),
 ) -> int:
     """Upsert many rows in one round trip, via a temporary staging table.
 
@@ -229,9 +230,12 @@ def merge_bulk(
     target's defaults still apply on insert and its existing values survive an
     update.
 
-    No VARIANT support, deliberately: nothing loaded in bulk here has one, and
-    a JSON column would need PARSE_JSON on the way out of staging. Use
-    `merge()` for those.
+    VARIANT columns are named in `json_columns`. They are staged as JSON TEXT
+    and parsed on the way out of staging, because a string loaded straight into
+    a VARIANT stays a string. This exists for the slip payloads: `merge()` sent
+    them one statement per row, about 1,070 MERGEs and 18 minutes of warehouse
+    time every three hours, which on its own kept the warehouse from ever
+    suspending between half-hourly runs.
     """
     if not rows:
         return 0
@@ -243,10 +247,16 @@ def merge_bulk(
 
     table = _identifier(table)
     stage = f"{table}_stage"
+    as_json = {_identifier(c) for c in json_columns}
     frame = pd.DataFrame(list(rows), columns=columns)
+    for c in as_json:
+        frame[c] = frame[c].map(lambda v: None if v is None else json.dumps(v))
 
     with conn.cursor() as cur:
         cur.execute(f"CREATE OR REPLACE TEMPORARY TABLE {stage} LIKE {table}")
+        for c in sorted(as_json):
+            cur.execute(f"ALTER TABLE {stage} DROP COLUMN {c}")
+            cur.execute(f"ALTER TABLE {stage} ADD COLUMN {c} VARCHAR")
     # use_logical_type keeps timezone-aware timestamps correct. Without it the
     # connector warns that they "can result in datetimes being incorrectly
     # written" -- a silent shift on kickoff_at would move every fixture into
@@ -255,6 +265,10 @@ def merge_bulk(
         conn, frame, stage.upper(), quote_identifiers=False, use_logical_type=True
     )
 
+    source = stage
+    if as_json:
+        picked = ", ".join(f"PARSE_JSON({c}) AS {c}" if c in as_json else c for c in columns)
+        source = f"(SELECT {picked} FROM {stage})"
     with conn.cursor() as cur:
-        cur.execute(_merge_into(table, columns, keys, stage, keep))
+        cur.execute(_merge_into(table, columns, keys, source, keep))
     return len(rows)
