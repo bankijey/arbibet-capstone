@@ -1,0 +1,99 @@
+version: 2
+
+# These tests are the ONLY enforcement in the warehouse. Snowflake honours
+# NOT NULL and ignores PRIMARY KEY, so every uniqueness and referential claim
+# in ddl.sql is documentation until it is asserted here.
+
+models:
+  - name: stg_arbitrage_signal
+    description: >
+      Arbitrage and near-arbitrage signals. Most rows are not surebets: the
+      recording threshold is 0.98, so the table measures cross-book
+      disagreement. `is_surebet` is the distinction.
+    columns:
+      - name: signal_key
+        tests: [unique, not_null]
+      - name: event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: source('core', 'dim_fixture')
+                field: event_id
+      - name: market_base_id
+        tests:
+          - not_null
+          # WARN, not fail. dim_market is the 236-row CROSSWALK -- the markets
+          # the two dialect books can be translated onto -- but three books are
+          # betradar-native and price markets the crosswalk never covered, and
+          # cross-native arbitrage on those is real. The models already fall
+          # back to 'market <id>' for the name. A failure here took the DAG
+          # down on 3 Sep for a signal on market 60210 (FINDINGS 8e).
+          - relationships:
+              config:
+                severity: warn
+              arguments:
+                to: source('core', 'dim_market')
+                field: market_base_id
+      - name: arbitrage
+        tests: [not_null]
+      - name: leg_spread_seconds
+        tests: [not_null]
+
+  - name: stg_ev_signal
+    description: >
+      Positive-EV outcomes. `implied_p` is borrowed from whichever book
+      publishes probabilities, named in `p_source`.
+    columns:
+      - name: signal_key
+        tests: [unique, not_null]
+      - name: event_id
+        tests:
+          - not_null
+          - relationships:
+              arguments:
+                to: source('core', 'dim_fixture')
+                field: event_id
+      - name: bookmaker_name
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [sportybet, msport, ilotbet, bet9ja, livescorebet]
+      - name: p_source
+        tests:
+          - not_null
+          # Only these two publish a probability with their prices. A third
+          # value means fill_probabilities changed and every EV number in the
+          # table is now measured against something else.
+          - accepted_values:
+              arguments:
+                values: [sportybet, msport]
+      - name: ev
+        tests: [not_null]
+
+  - name: stg_event_link
+    description: >
+      A fixture's page on each bookmaker, from the collector's all_events.url.
+      Sampled on all five books before being published.
+    columns:
+      - name: url
+        tests: [not_null]
+      - name: bookmaker_name
+        tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [sportybet, msport, ilotbet, bet9ja, livescorebet]
+
+  - name: stg_arbitrage_track
+    description: >
+      State changes of every market that ever carried a fresh surebet, replayed
+      through the detector. Arbitrage may be NULL (no cross-book price).
+    columns:
+      - name: event_id
+        tests: [not_null]
+      - name: market_id
+        tests: [not_null]
+      - name: observed_at
+        tests: [not_null]

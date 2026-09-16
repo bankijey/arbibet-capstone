@@ -188,7 +188,10 @@ def assign_unique_bookmakers_for_market(market_df: pd.DataFrame) -> pd.DataFrame
     return pd.DataFrame(out_rows)
 
 
-def compute_arbitrage(parsed_data: Dict[str, List[Market]]) -> List[Dict[str, Any]]:
+def compute_arbitrage(
+    parsed_data: Dict[str, List[Market]],
+    threshold: float = 1.0,
+) -> List[Dict[str, Any]]:
     """
     Full arbitrage pipeline:
     1. Combine outcomes from all bookmakers
@@ -231,14 +234,30 @@ def compute_arbitrage(parsed_data: Dict[str, List[Market]]) -> List[Dict[str, An
     compactible = outcomes.query("marketId in @market_stats")
     logger.info(f"    Filtering compactible markets took {time.time() - t:.3f}s")
 
-    # Initial arb check: 1/sum(1/odds) >= 1
+    # Initial arb check: 1/sum(1/best_odds) >= threshold
+    #
+    # The max() is load-bearing. This used to sum 1/odds over EVERY row --
+    # every book's every outcome -- so with N books the denominator was about
+    # N times too large and the result about 1/N of the true figure. More
+    # books made an arbitrage LESS likely to be detected, which is backwards,
+    # and it flagged nothing at all on live data. An arbitrage is bet at the
+    # best available price per outcome, which is exactly what
+    # assign_unique_bookmakers_for_market does further down; this gate now
+    # asks the same question it does.
+    #
+    # `threshold` exists because true surebets across public books are close
+    # to nonexistent. A caller may lower it to record near-arbitrage -- the
+    # market's best-price shortfall -- which is a real measure of cross-book
+    # disagreement. `arbitrage` on the returned record says which it is:
+    # above 1.0 is a surebet, below is the shortfall.
     t = time.time()
+    best_per_outcome = compactible.groupby(["marketId", "id"])["odds"].max()
     arb_candidates = (
-        compactible
-        .groupby("marketId")["odds"]
+        best_per_outcome
+        .groupby("marketId")
         .apply(lambda x: None if len(x) < 2 else 1 / np.sum(1 / (x + 1e-9)))
         .reset_index(name="arbitrage")
-        .query("arbitrage >= 1")
+        .query("arbitrage >= @threshold")
         .marketId
     )
     logger.info(f"    Initial arbitrage computation took {time.time() - t:.3f}s")

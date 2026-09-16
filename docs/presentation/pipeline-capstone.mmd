@@ -1,0 +1,84 @@
+%% Excalidraw-ready. Paste into excalidraw.com -> Insert -> Mermaid to Excalidraw.
+%% Every fan-out is written as separate edges: the importer does not read "a --> b & c".
+flowchart LR
+  subgraph IN["Read-only inputs"]
+    bronze(["markets bronze"])
+    match(["matcher"])
+    ingest(["ingestor bronze"])
+    silver["settlement engine"]
+    xwalk["crosswalk, 236 rows"]
+    msport["msport share codes"]
+  end
+
+  subgraph LIVE["Live odds path"]
+    prod["producer<br/>gzip, 8 MiB, keyed by event_id"]
+    topic["Redpanda market.ticks"]
+    arb["arbitrage consumer<br/>own group"]
+    ev["positive-EV consumer<br/>own group"]
+    watch["watcher<br/>20s poll, PRE-KICKOFF ONLY"]
+  end
+
+  subgraph BATCH["History path"]
+    dims["load_dims"]
+    flat["spark flatten"]
+    settle["settle (plain Python)"]
+    ticks["odds ticks<br/>replay price CHANGES"]
+    slipin["slip ingest"]
+  end
+
+  subgraph CORE["Snowflake CORE, task-written"]
+    d(["dimensions"])
+    sig(["arbitrage + EV signals<br/>MERGE on signal_key"])
+    tick(["fact_odds_tick, 32k"])
+    hist(["team_match 298k<br/>team_market_result 5.96M"])
+    slipraw(["bronze_slip_payload"])
+    aiout(["AI summaries"])
+  end
+
+  subgraph AN["Snowflake ANALYTICS, dbt only"]
+    stg["6 staging models"]
+    gold(["gold_market_efficiency<br/>gold_slip_leg_history"])
+  end
+
+  ai["gpt-4o-mini enrichment"]
+  st["Streamlit"]
+  af["Airflow, 12 tasks"]
+  ci["CI: ruff, mypy, 73 tests"]
+
+  bronze --> prod
+  prod --> topic
+  topic --> arb
+  topic --> ev
+  arb --> sig
+  ev --> sig
+  bronze --> watch
+  watch --> sig
+  bronze --> ticks
+  ticks --> tick
+  match --> dims
+  dims --> d
+  xwalk --> dims
+  xwalk --> prod
+  ingest --> flat
+  flat --> hist
+  silver --> settle
+  flat --> settle
+  settle --> hist
+  msport --> slipin
+  slipin --> slipraw
+  d --> stg
+  sig --> stg
+  tick --> stg
+  hist --> stg
+  slipraw --> stg
+  stg --> gold
+  gold --> ai
+  ai --> aiout
+  gold --> st
+  aiout --> st
+  af -.-> prod
+  af -.-> flat
+  af -.-> ticks
+  af -.-> stg
+  af -.-> ai
+  ci -.-> prod

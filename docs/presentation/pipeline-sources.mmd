@@ -1,0 +1,47 @@
+%% Excalidraw-ready. Paste into excalidraw.com -> Insert -> Mermaid to Excalidraw.
+%% No classDef (the importer drops it) - colour by hand, see COLOURS.md.
+flowchart LR
+  subgraph WEB["The open web"]
+    books["20+ bookmaker APIs"]
+    apif["API-Football<br/>rate limit + daily quota"]
+  end
+
+  subgraph GO["arbibet-markets (Go)"]
+    pool["collector pool<br/>one plugin per book"]
+    rate["per-plugin rate limiter<br/>one bad book stalls only itself"]
+    dedup["content-addressed cache"]
+  end
+
+  subgraph MK["arbibet-markets (Postgres 5440)"]
+    bronze(["bronze_event_payloads<br/>6.9M rows, APPEND ON CHANGE"])
+    idx["idx_bep_event_book_write"]
+  end
+
+  cold(["cold lake, DuckDB parquet<br/>3.85M cold / 4.94M warm"])
+
+  subgraph ING["api-football-ingestor (5434)"]
+    two["two-phase fetch<br/>hash dedup, checkpoint resume"]
+    fixtures(["bronze fixtures<br/>154k nested JSONB"])
+  end
+
+  subgraph MATCH["arbibet-matcher (5433)"]
+    em(["event_matches"])
+    ae(["apifootball_events<br/>ROLLING WINDOW"])
+  end
+
+  silver["arbibet-silver<br/>settlement engine, 4874 lines"]
+  xwalk["market crosswalk<br/>236 rows"]
+
+  books --> pool
+  pool --> rate
+  rate --> dedup
+  dedup --> bronze
+  idx -.-> bronze
+  bronze --> cold
+  apif --> two
+  two --> fixtures
+  bronze --> em
+  apif -.-> ae
+  em -.-> ae
+  fixtures --> silver
+  books -.-> xwalk

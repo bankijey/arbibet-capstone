@@ -1,0 +1,877 @@
+<meta charset="utf-8">
+<title>Arbibet</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  /* ---- tokens: dark-first (a projected deck), light for handouts ---- */
+  :root {
+    --ground: #0E1A16; --surface: #16241F; --surface-2: #1E2F28; --line: #2A3D34;
+    --ink: #EEF3EE; --muted: #9DB0A6; --faint: #6C8077;
+    --accent: #F2B33D; --accent-ink: #1A1200;
+    --wrong: #E0553F; --loud: #5DBE8A; --info: #7FB3E6;
+    --display: "Barlow Condensed", "Arial Narrow", Impact, sans-serif;
+    --body: "IBM Plex Sans", "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: "IBM Plex Mono", Consolas, "Courier New", monospace;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --ground: #F4F3EC; --surface: #FFFFFF; --surface-2: #ECEBE2; --line: #D6D8CD;
+      --ink: #142019; --muted: #566A60; --faint: #8A9A91;
+      --accent: #B8780F; --accent-ink: #FFFFFF;
+      --wrong: #B93A27; --loud: #2F8B5D; --info: #2C6FB0;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] {
+    --ground: #F4F3EC; --surface: #FFFFFF; --surface-2: #ECEBE2; --line: #D6D8CD;
+    --ink: #142019; --muted: #566A60; --faint: #8A9A91;
+    --accent: #B8780F; --accent-ink: #FFFFFF;
+    --wrong: #B93A27; --loud: #2F8B5D; --info: #2C6FB0;
+    color-scheme: light;
+  }
+
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--ground); color: var(--ink); font-family: var(--body); overflow: hidden; }
+  a { color: var(--info); }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---- stage ---- */
+  #viewport { position: fixed; inset: 0; display: grid; place-items: center; }
+  #stage { width: 1600px; height: 900px; position: absolute; left: 50%; top: 50%; transform-origin: center center; }
+  .slide {
+    position: absolute; inset: 0; padding: 72px 96px 88px; box-sizing: border-box;
+    visibility: hidden; opacity: 0; transition: opacity .25s ease;
+    display: flex; flex-direction: column; gap: 28px;
+  }
+  .slide.is-active { visibility: visible; opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .slide { transition: none; } }
+
+  /* ---- type scale ---- */
+  .eyebrow { font-family: var(--mono); font-size: 16px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
+  h1, h2 { font-family: var(--display); font-weight: 800; line-height: .95; letter-spacing: -.01em; margin: 0; text-wrap: balance; text-transform: uppercase; }
+  h1 { font-size: 132px; }
+  h2 { font-size: 72px; }
+  h3 { font-family: var(--display); font-weight: 700; font-size: 30px; text-transform: uppercase; letter-spacing: .02em; margin: 0 0 8px; color: var(--ink); }
+  p, li { font-size: 24px; line-height: 1.4; margin: 0; }
+  .lede { font-size: 30px; line-height: 1.35; color: var(--ink); max-width: 30ch; }
+  .muted { color: var(--muted); }
+  .small { font-size: 18px; line-height: 1.4; }
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  ul { padding-left: 1.1em; display: grid; gap: 10px; }
+  strong { color: var(--accent); font-weight: 600; }
+  em { color: var(--ink); font-style: italic; }
+
+  /* ---- layout helpers ---- */
+  .cols { display: grid; gap: 40px; flex: 1; min-height: 0; }
+  .cols-2 { grid-template-columns: 1fr 1fr; }
+  .cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+  .cols-21 { grid-template-columns: 2fr 1fr; }
+  .cols-12 { grid-template-columns: 1fr 2fr; }
+  .card { background: var(--surface); border: 1px solid var(--line); padding: 28px 32px; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .card.accent { border-color: var(--accent); }
+  .stat { display: flex; flex-direction: column; gap: 6px; }
+  .stat .n { font-family: var(--display); font-weight: 800; font-size: 96px; line-height: .9; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .stat .n.sm { font-size: 64px; }
+  .stat .l { font-size: 20px; color: var(--muted); }
+  .rule { height: 2px; background: var(--accent); width: 96px; }
+  .sources { margin-top: auto; font-size: 15px; line-height: 1.5; color: var(--faint); }
+  .sources a { color: var(--faint); }
+
+  /* ---- the silent-wrongness chip ---- */
+  .gotcha { border-left: 4px solid var(--wrong); background: var(--surface-2); padding: 18px 22px; display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start; }
+  .gotcha .dot { width: 12px; height: 12px; border-radius: 50%; background: var(--wrong); margin-top: 10px; }
+  .gotcha .k { font-family: var(--mono); font-size: 14px; letter-spacing: .12em; text-transform: uppercase; color: var(--wrong); }
+  .gotcha p { font-size: 21px; }
+  .loud { border-left-color: var(--loud); } .loud .dot { background: var(--loud); } .loud .k { color: var(--loud); }
+
+  /* ---- what / tooling / gotcha template ---- */
+  .wtg { display: grid; grid-template-columns: 1.2fr 1fr; grid-template-rows: 1fr auto; gap: 28px 40px; flex: 1; min-height: 0; }
+  .wtg .what { grid-row: 1 / 3; }
+  .wtg .tools { }
+  .wtg .gotcha { grid-column: 2; }
+  .tools .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-family: var(--mono); font-size: 16px; padding: 6px 12px; border: 1px solid var(--line); background: var(--surface); }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
+
+  /* ---- tables ---- */
+  table { border-collapse: collapse; width: 100%; font-size: 19px; }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-family: var(--mono); font-size: 14px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+  td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .tscroll { overflow: auto; min-height: 0; }
+
+  /* ---- images / diagrams ---- */
+  .shot { border: 1px solid var(--line); background: var(--surface); min-height: 0; overflow: hidden; display: flex; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; object-position: top; display: block; }
+  .diagram { flex: 1; min-height: 0; overflow: auto; background: var(--surface); border: 1px solid var(--line); padding: 16px; }
+  .diagram { overflow: hidden; }
+  .diagram-out { height: 100%; display: flex; align-items: center; justify-content: center; }
+  /* mermaid sets an inline max-width and width=100%; contain it inside the box on both axes */
+  .diagram-out svg { max-width: 100% !important; max-height: 100%; width: auto !important; height: auto; }
+  code { font-family: var(--mono); font-size: .92em; background: var(--surface-2); padding: 2px 6px; }
+  pre.code { font-family: var(--mono); font-size: 18px; line-height: 1.45; background: var(--surface-2); border: 1px solid var(--line); padding: 18px 22px; margin: 0; overflow: auto; }
+
+  /* ---- chrome ---- */
+  #progress { position: fixed; left: 0; bottom: 0; height: 4px; background: var(--accent); width: 0; transition: width .2s; z-index: 5; }
+  #counter { position: fixed; right: 20px; bottom: 14px; font-family: var(--mono); font-size: 13px; color: var(--faint); z-index: 5; }
+  #act { position: fixed; left: 20px; bottom: 14px; font-family: var(--mono); font-size: 13px; letter-spacing: .12em; text-transform: uppercase; color: var(--faint); z-index: 5; }
+  #help { position: fixed; top: 14px; right: 20px; font-family: var(--mono); font-size: 12px; color: var(--faint); z-index: 5; }
+  #notes { position: fixed; left: 0; right: 0; bottom: 0; max-height: 42vh; overflow: auto; background: var(--surface); border-top: 2px solid var(--accent); padding: 20px 32px 28px; transform: translateY(100%); transition: transform .25s; z-index: 10; font-size: 17px; line-height: 1.55; }
+  #notes.open { transform: none; }
+  #notes .t { font-family: var(--mono); font-size: 12px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+  #notes p { font-size: 17px; margin-bottom: 8px; }
+  .slide aside { display: none; }
+  .placeholder { border: 2px dashed var(--accent); color: var(--accent); padding: 16px 20px; font-family: var(--mono); font-size: 18px; }
+
+  /* title slide */
+  .title-slide { justify-content: flex-end; }
+  .title-slide .kick { font-family: var(--mono); color: var(--muted); font-size: 22px; letter-spacing: .06em; }
+  .title-slide .meta { display: flex; gap: 40px; font-family: var(--mono); font-size: 18px; color: var(--muted); }
+  .odds-board { position: absolute; top: 72px; right: 96px; font-family: var(--mono); font-size: 18px; color: var(--faint); text-align: right; line-height: 1.6; }
+  .odds-board b { color: var(--accent); font-weight: 500; }
+</style>
+
+<div id="viewport"><div id="stage">
+
+<!-- ============================== ACT 1 · WHY ============================== -->
+
+<section class="slide title-slide" data-act="Act 1 · Why" data-time="1:00">
+  <div class="odds-board">bet9ja&nbsp; <b>2.54</b><br>sportybet&nbsp; <b>1.76</b><br>1st half corners o/u 5.5<br>arbitrage <b>1.0396</b></div>
+  <div class="kick">Arbibet — a cross-bookmaker data platform</div>
+  <h1>Five books.<br>One honest number.</h1>
+  <p class="lede">From a Go odds collector to a Snowflake warehouse and a Streamlit dashboard — and what went silently wrong on the way.</p>
+  <div class="meta"><span class="placeholder">[YOUR NAME]</span><span class="placeholder">[IRONHACK DE COHORT]</span><span class="placeholder">[DATE]</span></div>
+  <aside>Open on the odds board top-right: two real prices from two real books that add up to a guaranteed 3.96% return on first-half corners. That is one of exactly four true surebets this platform found in 6.9 million payloads. Tell them the deck is about how we got to a number we can trust, and everything that tried to stop us. ~1 min.</aside>
+</section>
+
+<section class="slide" data-act="Act 1 · Why" data-time="1:15">
+  <div class="eyebrow">Why this, why now</div>
+  <h2>The world is betting</h2>
+  <div class="cols cols-3">
+    <div class="card"><div class="stat"><div class="n">$125B</div><div class="l">global sports betting market, 2026 — up from $119B in 2025</div></div></div>
+    <div class="card"><div class="stat"><div class="n">44%</div><div class="l">of that market is Europe; North America is the fastest-growing region</div></div></div>
+    <div class="card"><div class="stat"><div class="n">$326B</div><div class="l">projected by 2035 — an 11% compound growth rate from 2026</div></div></div>
+  </div>
+  <p class="muted">Legalisation, smartphones and digital payments are the drivers cited across every report — the same three things that make Nigeria the case study on the next slide.</p>
+  <div class="sources">Sources: <a href="https://www.thebusinessresearchcompany.com/report/sports-betting-global-market-report">The Business Research Company, Sports Betting Global Market Report 2026</a> · <a href="https://www.precedenceresearch.com/sports-betting-market">Precedence Research, Sports Betting Market to 2035</a> · <a href="https://www.grandviewresearch.com/industry-analysis/sports-betting-market-report">Grand View Research</a></div>
+  <aside>Keep it brisk — three numbers, one sentence each. The point is not the size, it is the direction. Market-size estimates differ by a few billion between houses; say "roughly" and move on. ~1:15.</aside>
+</section>
+
+<section class="slide" data-act="Act 1 · Why" data-time="1:15">
+  <div class="eyebrow">Why this, why now</div>
+  <h2>Odds became a market of their own</h2>
+  <div class="cols cols-21">
+    <div class="card">
+      <div class="stat"><div class="n">$44.8B</div><div class="l">combined monthly volume on Kalshi + Polymarket, June 2026</div></div>
+      <p>That is more than <strong>triple</strong> the ~$14B average <em>monthly</em> handle of every legal US sportsbook in 2025. Nine months earlier it was under $5B a month.</p>
+    </div>
+    <div class="card">
+      <h3>What that means for us</h3>
+      <ul>
+        <li>A price on an outcome is now a traded, public number.</li>
+        <li>Disagreement between prices is the product — not a bug.</li>
+        <li>Whoever reconciles prices fastest and most honestly wins.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="sources">Sources: <a href="https://www.pewresearch.org/short-reads/2026/05/27/trading-volume-on-prediction-markets-has-soared-in-recent-months/">Pew Research Center, May 2026</a> · <a href="https://www.trmlabs.com/resources/blog/how-prediction-markets-scaled-to-usd-21b-in-monthly-volume-in-2026">TRM Labs, 2026</a> · <a href="https://www.kucoin.com/news/flash/kalshi-and-polymarket-combined-2025-trading-volume-surpasses-44-billion">KuCoin: combined 2025 volume &gt; $44B</a></div>
+  <aside>The bridge slide. Prediction markets prove that a probability is a tradeable asset. Arbibet treats bookmaker prices the same way: five independent estimates of the same event, and the gaps between them are the signal. ~1:15.</aside>
+</section>
+
+<section class="slide" data-act="Act 1 · Why" data-time="1:30">
+  <div class="eyebrow">Why this, why now</div>
+  <h2>Nigeria: a football-betting nation</h2>
+  <div class="cols cols-3">
+    <div class="card"><div class="stat"><div class="n">54%</div><div class="l">of Nigerians surveyed placed a bet in the past 12 months (GeoPoll, July 2026)</div></div></div>
+    <div class="card"><div class="stat"><div class="n sm">~$590M</div><div class="l">sports-betting revenue in 2025, growing ~4.6% a year</div></div></div>
+    <div class="card"><div class="stat"><div class="n">75–80%</div><div class="l">of handle is football; ~9 in 10 bets are placed on a phone</div></div></div>
+  </div>
+  <p class="muted">Five of the books in this platform — sportybet, msport, ilotbet, bet9ja, livescorebet — are the ones on those phones. The booking-slip culture ("copy my code") is the behaviour the AI layer studies.</p>
+  <div class="sources">Sources: <a href="https://www.geopoll.com/blog/betting-africa-2026/">GeoPoll, Betting in Africa 2026</a> · <a href="https://nannews.ng/article/sports-betting-in-nigeria-in-2026-market-growth-and-the-new-state-level-rules/">News Agency of Nigeria, 2026</a> · <a href="https://igamingafrika.com/nigeria-igaming-market-overview-1in-africa/">iGaming Afrika, Nigeria market overview</a></div>
+  <aside>This is the "why these five books" slide. Headline participation figures for Nigeria vary wildly by source — one widely-repeated figure exceeds the adult population — so this deck uses GeoPoll's survey rate and the revenue estimate only. If asked, say exactly that: the honest number is the surveyed one. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 1 · Why" data-time="1:00">
+  <div class="eyebrow">Why this, why now</div>
+  <h2>World Cup 2026: the biggest betting event ever</h2>
+  <div class="cols cols-3">
+    <div class="card"><div class="stat"><div class="n">$3.3B</div><div class="l">legal US handle on the tournament (Deutsche Bank); estimates ran to $4.3B — ~9× Qatar 2022</div></div></div>
+    <div class="card"><div class="stat"><div class="n">$50–60B</div><div class="l">wagered worldwide (Macquarie / H2 Gambling Capital), up from ~$35B in 2022</div></div></div>
+    <div class="card"><div class="stat"><div class="n">10×</div><div class="l">"ten Super Bowls" — how FOX Sports summarised the tournament's total handle</div></div></div>
+  </div>
+  <p class="muted">The platform was collecting through the tournament. The slips punters copied, and the prices five books put on them, are the data in this deck.</p>
+  <div class="sources">Sources: <a href="https://www.cnbc.com/2026/06/10/the-world-cup-will-likely-be-the-biggest-gambling-event-in-history.html">CNBC, June 2026</a> · <a href="https://www.yogonet.com/international/news/2026/07/21/125483-us-sportsbooks-call-2026-world-cup-the-biggest-betting-event-ever-after-record-final-handle">Yogonet, July 2026</a> · <a href="https://www.foxsports.com/stories/soccer/2026-world-cup-betting-recap">FOX Sports recap</a> · <a href="https://www.casino.org/news/sports-betting-2026-world-cup-shatters-records/">Casino.org</a></div>
+  <aside>One minute. Land the scale, then pivot: "and every one of those wagers is a data point somebody had to reconcile." ~1:00.</aside>
+</section>
+
+<section class="slide" data-act="Act 1 · Why" data-time="1:30">
+  <div class="eyebrow">The business question</div>
+  <h2>People already pay for reconciled odds</h2>
+  <div class="cols cols-2">
+    <div class="card">
+      <h3>OddsJam — the proof of demand</h3>
+      <ul>
+        <li>Scans <strong>50+ sportsbooks</strong> for positive-EV and arbitrage bets.</li>
+        <li>Subscriptions from <strong>$39</strong> to <strong>$199</strong> a month (top tiers to $999).</li>
+        <li>Founded 2020; still independent and growing.</li>
+      </ul>
+      <p class="muted small">Sport is a data business already: every commentary line is a statistic — possession, xG, corners, form. The bet is just the price attached to it.</p>
+    </div>
+    <div class="card accent">
+      <h3>Arbibet's two questions</h3>
+      <ul>
+        <li><strong>Across five Nigerian and international books, do the prices ever disagree enough to matter?</strong></li>
+        <li><strong>When thousands of people copy a betting slip, does it actually make sense?</strong></li>
+      </ul>
+      <p class="muted small">Both need the same thing: every book's prices on one taxonomy, joined to what actually happened.</p>
+    </div>
+  </div>
+  <div class="sources">Sources: <a href="https://oddsjam.com/subscribe">OddsJam subscription packages</a> · <a href="https://xclsvmedia.com/oddsjam-review-2026-is-this-199-month-betting-tool-worth-it/">XCLSV, OddsJam review 2026</a></div>
+  <aside>Frame the whole project as answering two questions, and promise the answers come in Act 3: the first answer is "almost never, and here are the four times it did"; the second is "usually not, and here is the arithmetic." ~1:30.</aside>
+</section>
+
+<!-- ============================== ACT 2 · WHAT ============================== -->
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:15">
+  <div class="eyebrow">The platform, part 1 of 2</div>
+  <h2>Where the data comes from</h2>
+  <div class="diagram"><div class="diagram-out"></div>
+<script type="text/x-mermaid" class="mermaid-src">
+flowchart LR
+  subgraph WEB["The open web"]
+    books{{"20+ bookmaker APIs<br/>sportybet · msport · ilotbet<br/>bet9ja · livescorebet · …"}}
+    apif{{"API-Football<br/>~1,500 leagues<br/>rate limit + daily quota"}}
+  end
+
+  subgraph GO["arbibet-markets · Go"]
+    pool["collector pool<br/>one plugin per book"]
+    rate["per-plugin rate limiter<br/>one bad book stalls only itself"]
+    dedup["content-addressed cache"]
+  end
+
+  subgraph MK["arbibet-markets · Postgres :5440"]
+    bronze[("bronze_event_payloads · 6.9M rows<br/>verbatim BYTEA · APPEND ON CHANGE<br/>sha256 · parser_version · run_id")]
+    idx["idx_bep_event_book_write<br/>(event_id, bookmaker, write_time DESC)"]
+  end
+
+  cold[("cold lake · DuckDB → parquet<br/>cold 3.85M / 16.5 GB<br/>warm 4.94M / 26.4 GB")]
+
+  subgraph ING["api-football-ingestor · :5434"]
+    two["two-phase fetch<br/>hash dedup · checkpoint resume"]
+    fixtures[("bronze fixtures<br/>154k · nested JSONB")]
+  end
+
+  subgraph MATCH["arbibet-matcher · :5433"]
+    em[("event_matches<br/>bookmaker_event_ids[]")]
+    ae[("apifootball_events<br/>team ids · ROLLING WINDOW")]
+  end
+
+  silver["arbibet-silver · :5455<br/>settlement engine · 4,874 lines<br/>won / lost / void per market"]
+  xwalk{{"market crosswalk · 236 rows<br/>bet9ja &amp; livescorebet → betradar"}}
+
+  books --> pool --> rate --> dedup --> bronze
+  idx -.->|"every read drives on event_id"| bronze
+  bronze -->|"tiered export"| cold
+  apif --> two --> fixtures
+  bronze -->|"raw event feeds"| em
+  apif -.-> ae
+  em -.->|"resolves team ids"| ae
+  fixtures -->|"scores + statistics"| silver
+  books -.->|"market dialects"| xwalk
+
+  classDef store fill:#1E2F28,stroke:#F2B33D,color:#EEF3EE
+  classDef proc fill:#16241F,stroke:#5DBE8A,color:#EEF3EE
+  classDef ref fill:#2A1F12,stroke:#E0553F,color:#F2B33D
+  class bronze,cold,fixtures,em,ae store
+  class pool,rate,dedup,two,silver,idx proc
+  class books,apif,xwalk ref
+</script>
+  </div>
+  <aside>Left to right, and none of this is the capstone -- it is the platform the capstone plugs into. A Go collector per book, writing bronze only when a response actually changes, which is why bronze doubles as a tick store later. The matcher decides which entries across books are the same fixture; API-Football is the record of what actually happened; silver knows how to settle a market. Point at the ROLLING WINDOW on apifootball_events -- that is the biggest bug in the deck, and it is coming. ~1:15.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">The platform, part 2 of 2</div>
+  <h2>The capstone pipeline</h2>
+  <div class="diagram"><div class="diagram-out"></div>
+<script type="text/x-mermaid" class="mermaid-src">
+flowchart LR
+  subgraph IN["Read-only inputs"]
+    bronze[("markets bronze<br/>6.9M payloads")]
+    match[("matcher")]
+    ingest[("ingestor bronze<br/>154k fixtures")]
+    silver{{"vendored settlement engine"}}
+    xwalk{{"crosswalk · 236 rows"}}
+    msport{{"msport share codes"}}
+  end
+
+  subgraph LIVE["Live odds path"]
+    prod["producer/main.py<br/>latest payload per book → crosswalk<br/>gzip · 8 MiB · keyed by event_id"]
+    topic[["Redpanda · market.ticks<br/>one fixture snapshot per message"]]
+    arb["consumers/arb.py · own group<br/>1 / Σ(1/best odds)"]
+    ev["consumers/ev.py · own group<br/>price vs published probability"]
+    watch["watch/signals.py<br/>20 s poll · PRE-KICKOFF ONLY<br/>opens Snowflake only to write"]
+  end
+
+  subgraph BATCH["History path"]
+    dims["snowflake/load_dims.py"]
+    flat["spark/flatten.py<br/>JDBC partitioned · from_json · pivot"]
+    settle["spark/settle.py"]
+    ticks["odds/ticks.py<br/>replay bronze · price CHANGES only"]
+    slipin["slips/ingest.py<br/>verbatim · lastId cursor"]
+  end
+
+  subgraph CORE["Snowflake · CORE — task-written"]
+    d[("dim_fixture · dim_market<br/>dim_bookmaker · dim_market_outcome")]
+    sig[("fact_arbitrage_signal · fact_ev_signal<br/>MERGE on signal_key")]
+    tick[("fact_odds_tick · 32,057")]
+    hist[("fact_team_match · 298k<br/>fact_team_market_result · 5.96M")]
+    slipraw[("bronze_slip_payload · VARIANT")]
+    aiout[("gold_slip_summary_ai<br/>gold_fixture_summary_ai")]
+  end
+
+  subgraph AN["Snowflake · ANALYTICS — dbt only"]
+    stg["6 staging models<br/>QUALIFY dedups append-only sources"]
+    gold[("gold_market_efficiency<br/>gold_slip_leg_history")]
+  end
+
+  ai["enrich · gpt-4o-mini<br/>warehouse does the arithmetic"]
+  st["Streamlit · signals + fixture deep dive"]
+  af["Airflow · one DAG · 12 tasks"]
+  ci["GitHub Actions · ruff · mypy · 73 tests"]
+
+  bronze --> prod --> topic --> arb & ev --> sig
+  bronze --> watch --> sig
+  bronze --> ticks --> tick
+  match --> dims --> d
+  xwalk --> dims
+  xwalk --> prod
+  ingest --> flat --> hist
+  silver --> settle
+  flat --> settle --> hist
+  msport --> slipin --> slipraw
+  d & sig & tick & hist & slipraw --> stg --> gold
+  gold --> ai --> aiout
+  gold --> st
+  aiout --> st
+  af -.-> prod & flat & settle & ticks & stg & ai
+  ci -.-> prod & arb & watch
+
+  classDef store fill:#1E2F28,stroke:#F2B33D,color:#EEF3EE
+  classDef proc fill:#16241F,stroke:#5DBE8A,color:#EEF3EE
+  classDef topicC fill:#3A2E12,stroke:#F2B33D,color:#F2B33D
+  classDef ref fill:#2A1F12,stroke:#E0553F,color:#F2B33D
+  class bronze,match,ingest,d,sig,tick,hist,slipraw,aiout,gold store
+  class prod,arb,ev,watch,dims,flat,settle,ticks,slipin,stg,ai,st,af,ci proc
+  class topic topicC
+  class silver,xwalk,msport ref
+</script>
+  </div>
+  <aside>Everything here is new. Two paths out of the same bronze: a live one through Redpanda to two detectors in their own consumer groups, and a batch one through Spark. The watcher is the freshness path added later -- same code as the consumers, MERGEd on the same key, so the two converge instead of duplicating. CORE is task-written and ANALYTICS is dbt's, so a full-refresh can never drop something a task paid an API call for. Then say: "each of the next twelve slides is one box on this chart." ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:15">
+  <div class="eyebrow">Layer 1 · Collection</div>
+  <h2>The Go collector</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li>A pool of HTTP collectors hits <strong>20+ bookmaker APIs</strong> on a per-plugin schedule — one plugin per book, so one broken book never stalls the rest.</li>
+        <li>Validates, deduplicates with a content-addressed cache, persists to Postgres.</li>
+        <li><em>Inherited a v1 and re-platformed it.</em> My changes: the <strong>MongoDB → Postgres migration</strong>, <strong>team-ID extraction</strong>, and the <strong>event-ID collision fix</strong>. The plugin architecture predates me.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Go</span><span class="chip">Postgres</span><span class="chip">Kafka-instrumented</span><span class="chip">per-plugin rate limits</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong</div><p>Two different fixtures sharing one event id looked like one fixture with twice the prices. Nothing errored; the collision fix was found from the data, not a log.</p></div></div>
+  </div>
+  <aside>Attribution matters here and the panel will respect it. Say plainly what you inherited and what you changed. The three contributions are concrete and yours. ~1:15.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 2 · Bronze</div>
+  <h2>Markets bronze: keep everything, verbatim</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li><strong>6.9 million payloads</strong> from ~14 books, stored as the exact bytes each book returned — with <code>payload_sha256</code>, <code>parser_version</code> and <code>run_id</code> on every row.</li>
+        <li><strong>Append on change:</strong> a row is written only when a book's response differs from the last one. Bronze never updates.</li>
+        <li>Byte fidelity is the contract: a malformed body fails in the parser, where the failure has a reason, never on the way in.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Postgres</span><span class="chip">BYTEA</span><span class="chip">medallion</span><span class="chip">hash dedup</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong</div><p>"Append on change" means a book whose price has not moved contributes an <em>hours-old</em> leg to a "snapshot". An arbitrage across a fresh leg and a stale one is an artefact. The spread is now recorded on every signal — observed up to 30 hours.</p></div></div>
+  </div>
+  <aside>The single most important property of the whole platform is "append on change, verbatim". Everything downstream can be rebuilt from it — including the odds tick store in the capstone, which nobody planned but bronze already was. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:15">
+  <div class="eyebrow">Layer 2b · Cold storage</div>
+  <h2>The parquet lake attempt</h2>
+  <div class="cols cols-12">
+    <div class="card">
+      <div class="stat"><div class="n sm">8.8M</div><div class="l">bronze rows exported to parquet</div></div>
+      <div class="stat"><div class="n sm">43 GB</div><div class="l">on local disk, <code>D:\arbibet-cold</code></div></div>
+    </div>
+    <div class="card">
+      <h3>Two tiers, built with DuckDB</h3>
+      <table>
+        <tr><th>tier</th><th>rows</th><th>size</th><th>row groups</th></tr>
+        <tr><td>cold</td><td class="n">3,853,417</td><td class="n">16.5 GB</td><td class="n">377</td></tr>
+        <tr><td>warm</td><td class="n">4,936,610</td><td class="n">26.4 GB</td><td class="n">483</td></tr>
+      </table>
+      <p class="small muted">Same 12 columns as bronze — event, bookmaker, fire/ingest/write time, HTTP status, payload, sha256, parser version, run id — so it is a faithful mirror, not a summary.</p>
+      <div class="placeholder">[YOUR INPUT] why two tiers, what worked, why it paused — 2–3 bullets</div>
+    </div>
+  </div>
+  <aside>The numbers are real and read straight from the parquet metadata. Fill in the intent: was cold = older than N days? Was the goal to free Postgres, or to query with DuckDB? What stopped it — disk, time, or the capstone deadline? ~1:15.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 3 · Identity &amp; record</div>
+  <h2>Matcher + API-Football ingestor</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What they do</h3>
+      <ul>
+        <li><strong>Matcher:</strong> <em>Man Utd</em>, <em>Manchester Utd</em>, <em>Manchester United FC</em> are one club to a human and three strings to a database. It decides which entries across books are the same fixture and persists a canonical match graph.</li>
+        <li><strong>Ingestor:</strong> the record of what actually happened — <strong>154k fixtures</strong> as nested JSONB from API-Football, with a two-phase fetch to live inside a per-minute rate limit and a daily quota, hash dedup, and idempotent resume from checkpoint.</li>
+        <li>Built from scratch as a <em>disciplined rebuild of an earlier monolith</em>.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Python</span><span class="chip">Postgres · JSONB</span><span class="chip">one-shot Docker</span><span class="chip">checkpoint resume</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong</div><p>The matcher's API-Football projection is a <em>rolling window</em>. A fixture that resolved to team ids last week resolves to NULL today — and a plain MERGE wrote those NULLs over ids the warehouse already had. 3,226 fixtures blanked; nothing errored.</p></div></div>
+  </div>
+  <aside>Two repos, one slide, because together they are "identity and truth". The rolling-window bug is the biggest one in the deck — it comes back in Act 3. Plant it here. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:15">
+  <div class="eyebrow">Layer 4 · Settlement</div>
+  <h2>The silver settlement engine</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li><strong>4,874 lines</strong> of resolvers that take a market, an outcome and a final score, and say <em>won / lost / void</em> — for every betradar market the books price.</li>
+        <li>Period-resolved scores (1st half, 2nd half, match), a per-team form grain, and one rule that cost a debate: <strong>"full" = regulation + extra time, never penalties</strong>.</li>
+        <li>Vendored into the capstone and run at scale: <strong>5.96M</strong> settled team-market rows.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Python</span><span class="chip">pure functions</span><span class="chip">vendored</span></div></div>
+    <div class="gotcha loud"><div class="dot"></div><div><div class="k">Loudly wrong — the cheap kind</div><p>The engine wants <code>ft</code>/<code>aet</code>; the ingestor stores <code>FT</code>/<code>AET</code>. It refused all 87,600 rows as <code>unknown_status</code>. Annoying, obvious, fixed in minutes. Compare that to the slide before.</p></div></div>
+  </div>
+  <aside>This is the deck's first green chip. Make the contrast explicit: a loud failure is a gift. The engine also insists side_or_line="home" means "this team", not "the home team" — which is why two teams' histories cannot always be pooled. ~1:15.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 5 · Streaming</div>
+  <h2>Kafka fan-out: one snapshot, two detectors</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li>The producer reads each book's latest payload, parses it through the <strong>market crosswalk</strong> (bet9ja and livescorebet speak their own dialects; three books are betradar-native) and publishes <strong>one fixture snapshot per message</strong>, keyed by event id.</li>
+        <li>Two consumers in <strong>separate consumer groups</strong>: arbitrage (<code>1/Σ(1/best odds)</code>) and positive-EV (price vs a published probability).</li>
+        <li>At-least-once: offsets commit after the write, and a <strong>MERGE on <code>signal_key</code></strong> absorbs any replay.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Redpanda</span><span class="chip">confluent-kafka</span><span class="chip">pandas crosswalk</span><span class="chip">MERGE</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong</div><p>Measure a parser fix against messages produced <em>before</em> the fix and you measure the old parser. Three investigations were misled in one session. Rule: change parser → delete topic → delete groups → re-produce → then measure.</p></div></div>
+  </div>
+  <aside><b>Why a broker at all:</b> the snapshot is expensive to build and TWO detectors need it, so a topic means building it once -- and a third detector later just subscribes, touching nothing upstream. Offsets are a rewind button after a bug fix. <b>Why Redpanda:</b> it speaks the Kafka API, so this is ordinary Kafka code that could point at managed Kafka tomorrow with one config change -- no lock-in; one binary, no ZooKeeper and no JVM, so one container instead of three; it fits in the one core and 1 GB of RAM the compose file gives it; the same broker in development as a real deployment; and free, when the whole project cost twenty cents. <b>Say the counterpoint before they do:</b> at this volume a queue is not strictly required, and the watcher on the next slide deliberately skips it. Kafka is here for the SHAPE -- fan-out -- not the throughput. If the panel asks why Kafka at all for a daily batch: the producer and consumers make one pass and exit, which is what lets them sit in a batch DAG — but the shape is the real-time shape, and the next slide is where it becomes real-time. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 5b · Freshness</div>
+  <h2>The watcher: recompute the moment prices land</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li>Polls bronze every <strong>20 s</strong> for the newest write per upcoming fixture; any fixture whose prices moved is re-run through the <em>same</em> snapshot → arbitrage/EV code the consumers use, and MERGEd on the same key — so the two paths converge.</li>
+        <li><strong>Pre-kickoff only.</strong> A bet must still be placeable, and an in-play match is a payload storm.</li>
+        <li><strong>Snowflake is touched only to write.</strong> No opportunity, no statement, no credits.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Python loop</span><span class="chip">Postgres · indexed poll</span><span class="chip">Snowflake MERGE</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Nearly wrong, caught in the log</div><p>First run: a 3-day window = 1,368 fixtures, and the poll became a <strong>40-second seq scan</strong> of the 6.9M-row table. A 6-hour window and an indexed key: under a second. Then it primed a baseline instead of recomputing 1,300 fixtures the DAG already covered.</p></div></div>
+  </div>
+  <aside>This is how the legacy system worked and it was rebuilt on request in an afternoon because every piece already existed as a tested function. Verified live: new signals landed within one poll. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 6 · Batch</div>
+  <h2>Flatten with Spark, settle in Python</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li><strong>flatten:</strong> 154k nested-JSONB fixtures → <strong>298k</strong> wide team-match rows: period scores, xG, shots, corners, possession, passes. JDBC partitioned reads, <code>from_json</code> with a partial schema, pivot, self-join.</li>
+        <li><strong>settle:</strong> every team-match row × every market the books price, through the vendored engine → <strong>5.96M</strong> results. <em>Not a Spark job</em> — the input is already flat, so it is a Python loop over Snowflake.</li>
+        <li>Incremental in the DAG (<code>FLATTEN_SINCE_DAYS=3</code>); the full backfill is an 80-minute, 505 MB scan.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">PySpark 4.2</span><span class="chip">JDK 17</span><span class="chip">settle: plain Python</span><span class="chip">runs in the Airflow image</span></div></div>
+    <div class="gotcha loud"><div class="dot"></div><div><div class="k">Loudly wrong — but expensively</div><p>One fixture in 153,386 had no score. A NOT NULL failed the write — <em>after 80 minutes</em>. Two such runs were lost. Rule now: prove a long job on a 3,000-row bound before running it whole.</p></div></div>
+  </div>
+  <aside>The Spark code in one breath. flatten.py is the ONLY real Spark job. read_payloads does a JDBC partitioned read -- eight partitions keyed on the bronze id, so eight workers pull in parallel instead of one connection dragging 505 MB. parse applies from_json with a PARTIAL schema: declare only the fields you want and Spark discards the rest, which is how nested JSONB becomes columns with no manual traversal. latest_per_fixture is a window dedup; team_statistics is an explode-then-pivot rather than a UDF, because the stat labels are known and a pivot stays in the JVM; team_rows makes the two team-rows per fixture and self-joins to attach the OPPONENT's xG. The DataFrame is cached because three branches read it -- both sides and the pivot -- and without that the 505 MB parse runs three times. settle.py is NOT Spark and its docstring says so: the input is already-flattened fact_team_match in Snowflake, and the work is a nested loop in Python over ~225 (market, side) combinations per fixture calling the vendored settle() and team_perspective(). If asked why it lives in spark/: naming it honestly matters more than a tidy folder. Windows gotcha for the panel: spark.jars.packages needs a Hadoop temp dir Windows cannot provide without winutils.exe, so Spark runs inside the Airflow image. Then --env-file .env passed the HOST's JAVA_HOME into the Linux container and the JVM never started. Both in the troubleshooting slide. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 7 · Warehouse</div>
+  <h2>Snowflake: a medallion with two owners</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li><strong>CORE</strong> is task-written (consumers, Spark, the LLM tasks); <strong>ANALYTICS</strong> is dbt-written. A dbt full-refresh can never drop something a task paid an API call for.</li>
+        <li>Snowflake enforces <strong>NOT NULL and nothing else</strong> — PRIMARY KEY is documentation. So every write is a MERGE on a natural key, and re-running anything converges.</li>
+        <li>Loads stage through <code>write_pandas</code> + one MERGE after a row-at-a-time loader died at 446 of 4,527 rows and left the table silently partial.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">Snowflake</span><span class="chip">MERGE</span><span class="chip">write_pandas</span><span class="chip">TIMESTAMP_TZ</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong</div><p>Session <code>TIMEZONE</code> defaults to <em>America/Los_Angeles</em>, and <code>TIMESTAMP_TZ</code> keeps the writer's offset forever. Every instant was correct; every kick-off printed <strong>nine hours early</strong>. An evening Ligue 1 match at 11:45.</p></div></div>
+  </div>
+  <aside>The timezone one is a good teaching moment because the data was never wrong — only the rendering. Fix was three lines: pin the session to Europe/Berlin in the connector and dbt, and cast to TIMESTAMP_LTZ where it is displayed. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 8 · Transformation</div>
+  <h2>dbt: the models, and the tests that earn their keep</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li><strong>8 models</strong>: staging views over the facts, gold tables for market efficiency and slip-leg history, an observed-outcome-label model built from what the books themselves publish.</li>
+        <li><strong>30 tests</strong>, four of them singular and written after a bug: <em>arbitrage is physically plausible</em>, <em>slip legs are unique</em>, <em>odds are real prices</em>, <em>gold is not empty</em>.</li>
+        <li><code>on-run-start</code> pins the session timezone; <code>QUALIFY</code> dedups every append-only source before it is joined.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">dbt-snowflake</span><span class="chip">singular tests</span><span class="chip">macros</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong</div><p><code>bronze_slip_payload</code> is keyed on <em>payload hash</em>, so a slip re-fetched after losing a leg is stored <em>again</em>. 598 rows for 409 slips → <strong>2,247 duplicated legs</strong>, fed to the LLM with repeats. Fix: read the table by the key it actually has.</p></div></div>
+  </div>
+  <aside><b>What dbt is doing here.</b> Everything upstream WRITES facts; dbt only ever READS them and shapes them for the dashboard. That split is enforced by schema: tasks own CORE, dbt owns ANALYTICS, and dbt has no write path into CORE at all -- so a full-refresh cannot drop a table a task paid an API call for. <b>dbt run</b> builds 8 models in dependency order, working out that order itself from the ref() and source() calls -- nobody maintains a list. Six staging models are VIEWS: they rename and lightly filter facts the pipeline already wrote, so a table would just be a second copy that can go stale. The two gold models are TABLES, because the dashboard reads them on every page load and a view would re-scan five million settled rows each time someone opens the URL. Last run: 8 of 8 OK, about 12 seconds. <b>dbt test</b> then runs 31 assertions against what was just built -- 26 generic ones declared in YAML (not_null, unique, accepted_values, and relationships for foreign keys) plus 5 singular tests, which are just SQL that must return zero rows. The generic ones catch schema drift. The singular ones are the interesting half, because every one of them was written the day a bug got past everything else: arbitrage_is_physically_plausible exists because the first run reported a 7.83x arbitrage; slip_legs_are_unique because two joins were fanning legs out; odds_are_real_prices because a book publishes 0.00 for a suspended outcome; slip_rates_are_proportions because pooling two teams' histories produced a rate above 1; gold_is_not_empty because an empty table passes every column test ever written. <b>Order matters in the DAG:</b> dbt_run, then dbt_test, then the LLM tasks -- the model is the one step that costs money per run, and paying for a verdict on data that failed its own tests is the wrong order. And one test taught its own lesson: a relationships test on market_base_id used to FAIL the run, but dim_market is the crosswalk and native books legitimately price outside it, so it is warn-severity now. A test encodes an assumption; if the assumption is wrong the test is too. The point to make about dbt: generic tests catch schema drift; the singular tests here each encode a bug that a plausible number got past. "Arbitrage physically plausible" exists because the first run reported a 7.83× arbitrage. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:45">
+  <div class="eyebrow">Layer 9 · AI</div>
+  <h2>An LLM that may use nothing but our data</h2>
+  <div class="wtg">
+    <div class="card what">
+      <h3>What it does</h3>
+      <ul>
+        <li><strong>Slip verdicts:</strong> every copied booking slip, leg by leg, with the price and how often that exact market has landed for that side. Opens with a bold sentence: <em>"a 1-in-232 shot."</em></li>
+        <li><strong>Fixture briefs:</strong> three paragraphs — what the market thought, what both sides had been doing, where they disagree.</li>
+        <li><strong>All arithmetic in the warehouse.</strong> The model is handed finished numbers and forbidden from computing, from outside knowledge, and from reading "copied by 8,462" as a probability.</li>
+        <li>The cache key hashes the <em>evidence</em>, not just the subject.</li>
+      </ul>
+    </div>
+    <div class="card tools"><h3>Tooling</h3><div class="chips"><span class="chip on">OpenAI gpt-4o-mini</span><span class="chip">Cortex — blocked on trial</span><span class="chip">signature cache</span></div></div>
+    <div class="gotcha"><div class="dot"></div><div><div class="k">Silently wrong, twice</div><p>A verdict said <em>"recent form of 90%"</em> beside a table reading <em>"no history"</em> — legs unchanged, evidence gone, cache key unchanged. Later, <code>round(1.19)=1</code> produced <em>"1 in 1 … extremely rare"</em> for an 84%-likely slip. Both fixed in SQL, not in the prompt.</p></div></div>
+  </div>
+  <aside>Snowflake Cortex was the plan and would have been free; it refuses AI functions on trial accounts, verified in the console. Moving to an orchestrated OpenAI task put the LLM behind a swappable boundary. Emphasise the design rule: the model narrates numbers it did not compute. ~1:45.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 10 · Serving &amp; orchestration</div>
+  <h2>Streamlit and Airflow</h2>
+  <div class="cols cols-2">
+    <div class="shot"><img alt="Dashboard overview" src="{{IMG:01-overview}}"></div>
+    <div class="card">
+      <h3>Streamlit</h3>
+      <ul class="small">
+        <li>Two pages: market signals, and a deep dive per fixture with the LLM brief, every book's price over time, and both sides' record.</li>
+        <li>Queries cached <strong>10 min</strong> because Snowflake auto-suspends at 5 — an uncached page load would bill a minute of credit for a page nobody is reading.</li>
+        <li>Standalone: imports no pipeline code, so Community Cloud installs from a 5-line <code>requirements.txt</code>.</li>
+      </ul>
+      <h3>Airflow</h3>
+      <ul class="small">
+        <li>One DAG, <strong>12 tasks</strong>, LocalExecutor. Every task is a BashOperator against a <em>separate</em> pipeline venv — the DAG file imports nothing from the project, so the scheduler's interpreter never meets pyspark or the Snowflake connector.</li>
+        <li>Never backfills: every task reads the <em>current</em> state of bronze, not a partition.</li>
+      </ul>
+    </div>
+  </div>
+  <aside>If there is time, this is the live-demo cue: open the dashboard, click a deep dive, show the price chart with the kick-off line. Otherwise the screenshot carries it. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 2 · What I built" data-time="1:30">
+  <div class="eyebrow">Layer 11 · Performance</div>
+  <h2>Indexes: the one query shape you never write</h2>
+  <div class="cols cols-2">
+    <div class="card">
+      <h3>The index that holds bronze up</h3>
+      <pre class="code">idx_bep_event_book_write
+  (event_id, bookmaker, write_time DESC)</pre>
+      <ul>
+        <li>Every read drives on <code>event_id</code> — the leading column. "Latest per book" is one ordered walk.</li>
+        <li><strong>Never</strong> filter on <code>bookmaker</code> or <code>write_time</code> alone: no index leads with them, so the planner falls back to a sequential scan over the BYTEA payload bodies. That is the query that froze the production host mid-tournament.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Measured, not assumed</h3>
+      <table>
+        <tr><th>poll shape</th><th>fixtures</th><th>time</th></tr>
+        <tr><td><code>event_id = ANY(…)</code>, 3-day window</td><td class="n">1,368</td><td class="n">≈ 40 s</td></tr>
+        <tr><td><code>event_id = ANY(…)</code>, 6-hour window</td><td class="n">100</td><td class="n">&lt; 1 s</td></tr>
+      </table>
+      <p class="small muted">Same index, same query. A large enough array tips the planner into scanning the table anyway. Bound the key set and the index serves it.</p>
+      <p class="small">In Snowflake the equivalent discipline is the <strong>MERGE key</strong>: every write matches on a natural key so re-runs converge instead of duplicate.</p>
+    </div>
+  </div>
+  <aside>Two concrete stories, both measured this week. The panel will like that the 40s→&lt;1s figure came from the watcher's own log, not a benchmark. ~1:30.</aside>
+</section>
+
+<!-- ============================== ACT 3 · LEARNED ============================== -->
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="1:30">
+  <div class="eyebrow">Results</div>
+  <h2>What the pipeline actually found</h2>
+  <div class="cols cols-3">
+    <div class="card"><div class="stat"><div class="n">4</div><div class="l">true surebets in 6.9M payloads. First run said 174 — every extra one was a crosswalk defect.</div></div></div>
+    <div class="card"><div class="stat"><div class="n sm">5.96M</div><div class="l">settled team-market results; 32,057 price changes replayed with 0 unparseable payloads</div></div></div>
+    <div class="card"><div class="stat"><div class="n">393</div><div class="l">booking slips judged; 86% of legs reach a settled history</div></div></div>
+  </div>
+  <div class="cols cols-2">
+    <div class="card"><p><strong>Arbitrage is approximately zero — and that is the answer.</strong> The best surebet, 1.0396, is on first-half corners: the obscure market where soft books pay least attention.</p></div>
+    <div class="card"><p><strong>Popularity and soundness are unrelated.</strong> 5,739 people copied a slip with a 1-in-411,956 chance. The most-copied slip on the same fetch was a sane 1-in-13.</p></div>
+  </div>
+  <aside>Answer the two questions from Act 1 here, explicitly. 72 unit tests, 30 dbt tests, ruff and mypy clean — say it once. ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="2:30">
+  <div class="eyebrow">The thesis</div>
+  <h2>Silent wrongness beats loud failure — and it is worse</h2>
+  <div class="tscroll">
+  <table>
+    <tr><th>What it looked like</th><th>What it was</th><th>What caught it</th></tr>
+    <tr><td>174 arbitrages, best 7.83×</td><td>O/U ladder collapsed into one market; asian handicap not normalised; suspended prices read as live</td><td>"Is 783% of stake physically possible?"</td></tr>
+    <tr><td>Slip cards: "0 with history"</td><td>Rolling-window NULLs MERGEd over 3,226 fixtures' team ids</td><td>The dashboard put a claim beside its evidence</td></tr>
+    <tr><td>Kick-off 11:45</td><td>Session timezone America/Los_Angeles; TIMESTAMP_TZ keeps the offset</td><td>"Ligue 1 does not kick off at lunch"</td></tr>
+    <tr><td>"Won 0/10" for every side</td><td>Compared <code>RESULT</code> to "win"; the column holds "W"</td><td>Reading the rendered page</td></tr>
+    <tr><td>"1 in 1 … extremely rare"</td><td><code>round(1.19)=1</code>; model invented a frequency from the copy count</td><td>Reading the rendered sentence</td></tr>
+    <tr><td>"outcome 12"</td><td>Settlement taxonomy names only what it can settle; id 12 is <em>over</em> in one market and <em>1-2</em> in another</td><td>Refusing to guess; using the book's own label</td></tr>
+    <tr><td>A price collapsing to 0.00</td><td>One book emits 0.00 for suspended outcomes; in the engine <code>1/0=∞</code> and the market is never flagged</td><td>A chart axis reaching zero when told not to</td></tr>
+  </table>
+  </div>
+  <div class="gotcha"><div class="dot"></div><div><div class="k">The pattern</div><p>Every one produced a <strong>plausible number</strong>. None raised an error, failed a test, or changed a row count. The loud failures — <code>unknown_status</code>, the NOT NULL at write — were the cheap ones. Design accordingly: put claims next to their evidence, and ask "is this physically possible?" before "does it run?".</p></div></div>
+  <aside>Give this slide the most time. Walk two or three rows, not all seven. End on the last sentence of the chip — it is the one line you want the panel to repeat back. ~2:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="2:00">
+  <div class="eyebrow">Troubleshooting the toolchain</div>
+  <h2>What each tool taught me, the hard way</h2>
+  <div class="cols cols-3">
+    <div class="card">
+      <h3>Kafka / Redpanda</h3>
+      <ul class="small">
+        <li>Two detectors need two consumer groups, or one gets every message and the other none — silently.</li>
+        <li>Reset the topic before measuring a parser change.</li>
+      </ul>
+      <h3>Airflow</h3>
+      <ul class="small">
+        <li>Keep the pipeline venv separate from Airflow's own; the DAG file imports nothing from the project.</li>
+        <li><code>--env-file .env</code> handed the host's <code>JAVA_HOME</code> to a Linux container: the JVM never started.</li>
+        <li>Mount the logs volume or a failed task explains nothing.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Spark</h3>
+      <ul class="small">
+        <li>Windows has no Hadoop temp dir without <code>winutils.exe</code> — run Spark in the image, never on the host.</li>
+        <li>Bound a long job (3,000 rows) before the 80-minute run.</li>
+      </ul>
+      <h3>dbt</h3>
+      <ul class="small">
+        <li>Separate who writes what: CORE vs ANALYTICS. A full-refresh must never drop paid work.</li>
+        <li>Keep <code>target/</code> out of git — artifacts got swept into commits.</li>
+        <li>QUALIFY every append-only source before joining it.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Snowflake</h3>
+      <ul class="small">
+        <li>PRIMARY KEY is documentation; MERGE on natural keys.</li>
+        <li>Session timezone is LA by default; TIMESTAMP_TZ keeps the writer's offset.</li>
+        <li>Cortex AI functions refuse trial accounts — verified before switching to OpenAI.</li>
+        <li>Stage bulk loads with <code>write_pandas(use_logical_type=True)</code>.</li>
+      </ul>
+      <h3>Git &amp; shell</h3>
+      <ul class="small">
+        <li>Piping tests through <code>tail</code> masked exit codes — a broken build was committed. <code>set -o pipefail</code>.</li>
+        <li>Two sessions in one working tree commit each other's files.</li>
+      </ul>
+    </div>
+  </div>
+  <aside>Dense on purpose — this is the slide the panel will photograph. Do not read it. Pick the one story per column you tell best (JAVA_HOME, winutils, Cortex) and let the rest sit. ~2:00.</aside>
+</section>
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="1:30">
+  <div class="eyebrow">Principles</div>
+  <h2>Four acronyms, applied — not recited</h2>
+  <div class="cols cols-2">
+    <div class="card">
+      <h3>YAGNI — You Aren't Gonna Need It</h3>
+      <p class="small">A 16-hour phased crosswalk rebuild was proposed; the crosswalk CSV turned out to exist. Build for the case in front of you.</p>
+      <h3>KISS — Keep It Simple, Stupid</h3>
+      <p class="small">The watcher is one polling loop composing four existing functions — no new queue, no new service. Spark was skipped for the tick extractor: 5,000 payloads is a for-loop.</p>
+    </div>
+    <div class="card">
+      <h3>DRY — Don't Repeat Yourself</h3>
+      <p class="small">One MERGE builder for every write; one crosswalk parses both the live signals and the historical ticks, so a chart that disagrees with a signal is a real disagreement.</p>
+      <h3>SOLID — Single responsibility · Open/closed · Liskov substitution · Interface segregation · Dependency inversion</h3>
+      <p class="small">The LLM sits behind a swappable boundary (Cortex → OpenAI was a one-file change). Prompt building is separate from the API call because the prompt is where the decisions are.</p>
+    </div>
+  </div>
+  <aside>Say the acronyms out loud in full once — the brief asked for it — then give one example each. The crosswalk rebuild story is a good one because it was your correction: "you overcomplicate things." ~1:30.</aside>
+</section>
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="1:45">
+  <div class="eyebrow">Method &amp; authorship</div>
+  <h2>AI-assisted development, honestly</h2>
+  <div class="cols cols-2">
+    <div class="card">
+      <h3>How the work was done</h3>
+      <ul class="small">
+        <li>A <strong>spec-driven coordinator → implementor → verifier</strong> loop. I wrote the architecture, the specifications and the acceptance checks; AI implementors wrote much of the code against them; I reviewed and verified.</li>
+        <li>Used deliberately to <strong>improve a monolith I had already built</strong>: <span class="placeholder">[WHICH REPO, WHAT CHANGED]</span> — the API-Football ingestor's README calls itself "a disciplined rebuild of an earlier monolith".</li>
+        <li>Every finding, trap and convention is written down in a 900-line <code>FINDINGS.md</code> as part of the work, not after it.</li>
+      </ul>
+    </div>
+    <div class="card accent">
+      <h3>What is mine, what is reused, what is new</h3>
+      <ul class="small">
+        <li><strong>Reused:</strong> the bronze collection layer, the matcher, the five parsers, the 236-row crosswalk, the arbitrage/EV engine, the 4,874-line settlement engine.</li>
+        <li><strong>New in the capstone:</strong> producer, consumers, watcher, warehouse schema, Spark jobs, slip ingest, every dbt model, both LLM tasks, CI, the DAG, the dashboard.</li>
+        <li><strong>Collector:</strong> inherited v1; my Mongo→Postgres migration, team-ID extraction, event-ID collision fix.</li>
+      </ul>
+    </div>
+  </div>
+  <aside>This slide protects you. Panels reward candour about AI use far more than they penalise it, and the reused/new split is exactly the README's honesty statement. Fill the monolith placeholder with the specific repo. ~1:45.</aside>
+</section>
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="1:00">
+  <div class="eyebrow">Costs</div>
+  <h2>What it cost to run</h2>
+  <div class="cols cols-2">
+    <div class="card">
+      <table>
+        <tr><th>component</th><th>usage</th><th>cost</th></tr>
+        <tr><td>Snowflake</td><td class="n">9.27 credits over 3 active days · 0.05 GB stored</td><td class="n">$0 — 30-day trial credit</td></tr>
+        <tr><td>OpenAI gpt-4o-mini</td><td class="n">a few hundred calls (slip verdicts + fixture briefs)</td><td class="n">≈ $0.30 (estimate)</td></tr>
+        <tr><td>Redpanda, Airflow, Postgres, Spark</td><td class="n">local containers</td><td class="n">$0</td></tr>
+        <tr><td>Streamlit Community Cloud</td><td class="n">—</td><td class="n">$0</td></tr>
+        <tr><td>Cold parquet lake</td><td class="n">43 GB local disk</td><td class="n">$0</td></tr>
+      </table>
+    </div>
+    <div class="card">
+      <h3>Local machine power</h3>
+      <div class="placeholder">[YOUR INPUT] kWh / average watts during the 80-minute Spark runs and the collection window; the tool you measured with</div>
+      <p class="small muted">Snowflake Cortex would have been $0 and was the original plan; it is unavailable on trial accounts, so the LLM moved to OpenAI — which, as a side effect, made it swappable.</p>
+    </div>
+  </div>
+  <aside>The Snowflake figure is read from ACCOUNT_USAGE, not estimated. If asked what 9.27 credits would cost off-trial: roughly $20–30 at list pricing for an X-Small — say "tens of dollars", do not quote a rate you cannot cite. ~1:00.</aside>
+</section>
+
+<section class="slide" data-act="Act 3 · What I learned" data-time="1:00">
+  <div class="eyebrow">Next</div>
+  <h2>What I would do next</h2>
+  <div class="cols cols-2">
+    <div class="card">
+      <h3>Known gaps, deliberately recorded</h3>
+      <ul class="small">
+        <li>The 0.00-odds parser defect still reaches the arbitrage engine upstream — a false-<em>negative</em> source. Fix belongs in the markets repo beside the other four.</li>
+        <li>msport's parser likely shares sportybet's suspended-market bug; unchecked.</li>
+        <li>Bookmaker names are shown; a repo-wide scrub was built, reverted on request, and documented for re-use.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Roadmap</h3>
+      <ul class="small">
+        <li>Postgres <code>LISTEN/NOTIFY</code> to make the watcher event-driven instead of 20-second polling.</li>
+        <li>Arbitrage-over-time: the as-of join that shows the line crossing 1.0.</li>
+        <li>Events, lineups and players from API-Football into the same medallion.</li>
+        <li>AWS, IaC, Iceberg, Great Expectations — absent by decision, not omission.</li>
+      </ul>
+    </div>
+  </div>
+  <aside>Keep it short; the panel's questions start here. The first bullet is a genuine open bug and saying so is stronger than hiding it. ~1:00.</aside>
+</section>
+
+<section class="slide title-slide" data-act="Close" data-time="0:30">
+  <div class="kick">Arbibet</div>
+  <h1>Ask me what<br>went wrong.</h1>
+  <p class="lede">Every number in this deck is measured, and the ones that mean less than they look are labelled.</p>
+  <div class="meta"><span class="placeholder">[DASHBOARD URL]</span><span class="placeholder">[REPO URL]</span></div>
+  <aside>Invite questions on the failures specifically — you have better answers there than anyone expects. ~0:30. Total running time with the suggested timings is about 33 minutes; trim the Nigeria or World Cup slide to 45 seconds each to land at 30.</aside>
+</section>
+
+</div></div>
+
+<div id="progress"></div>
+<div id="act"></div>
+<div id="counter"></div>
+<div id="help">← → navigate · N notes · F fullscreen</div>
+<div id="notes"><div class="t">Speaker notes</div><div id="notes-body"></div></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mermaid/10.9.1/mermaid.min.js"></script>
+<script>
+(function () {
+  if (window.mermaid) mermaid.initialize({ startOnLoad: false, theme: 'dark', securityLevel: 'loose' });
+  async function renderDiagram(slide) {
+    const src = slide.querySelector('.mermaid-src'); const out = slide.querySelector('.diagram-out');
+    if (!src || !out || out.dataset.done || !window.mermaid) return;
+    out.dataset.done = '1';
+    try { const r = await mermaid.render('mmd' + Math.random().toString(36).slice(2), src.textContent); out.innerHTML = r.svg; }
+    catch (e) { out.innerHTML = '<p class="muted">diagram failed to render: ' + e.message + '</p>'; }
+  }
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  const stage = document.getElementById('stage');
+  const progress = document.getElementById('progress');
+  const counter = document.getElementById('counter');
+  const act = document.getElementById('act');
+  const notes = document.getElementById('notes');
+  const notesBody = document.getElementById('notes-body');
+  let i = 0;
+
+  function fit() {
+    const s = Math.min(window.innerWidth / 1600, window.innerHeight / 900);
+    stage.style.transform = 'translate(-50%,-50%) scale(' + s + ')';
+  }
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((s, k) => s.classList.toggle('is-active', k === i));
+    progress.style.width = ((i + 1) / slides.length * 100) + '%';
+    counter.textContent = (i + 1) + ' / ' + slides.length;
+    const s = slides[i];
+    act.textContent = (s.dataset.act || '') + (s.dataset.time ? '  ·  ' + s.dataset.time : '');
+    const a = s.querySelector('aside');
+    notesBody.innerHTML = a ? '<p>' + a.innerHTML + '</p>' : '<p class="muted">No notes.</p>';
+    try { if (location.hash !== '#' + (i + 1)) history.replaceState(null, '', '#' + (i + 1)); } catch (_) {}
+    renderDiagram(s);
+  }
+  function fromHash() {
+    const n = parseInt((location.hash || '#1').slice(1), 10);
+    show(isNaN(n) ? 0 : n - 1);
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('hashchange', fromHash);
+  document.addEventListener('keydown', (e) => {
+    if (e.target && /INPUT|TEXTAREA/.test(e.target.tagName)) return;
+    switch (e.key) {
+      case 'ArrowRight': case ' ': case 'PageDown': e.preventDefault(); show(i + 1); break;
+      case 'ArrowLeft': case 'PageUp': e.preventDefault(); show(i - 1); break;
+      case 'Home': show(0); break;
+      case 'End': show(slides.length - 1); break;
+      case 'n': case 'N': notes.classList.toggle('open'); break;
+      case 'f': case 'F': document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen(); break;
+    }
+  });
+  document.getElementById('viewport').addEventListener('click', (e) => {
+    if (e.target.closest('a, button, #notes')) return;
+    show(e.clientX > window.innerWidth / 2 ? i + 1 : i - 1);
+  });
+  fit(); fromHash();
+})();
+</script>

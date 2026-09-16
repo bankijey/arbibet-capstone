@@ -1,0 +1,40 @@
+name: CI
+
+# Every gate in this file is a bare invocation. The configuration in
+# pyproject.toml decides what ruff and mypy cover, so what runs here is
+# identical to what runs locally -- a longer command line would be a second
+# definition, and the two would drift.
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # 3.12, not latest. pyspark 3.5 dies on 3.12 and pyspark 4 needs it;
+          # the project is pinned to the version its dependencies support, and
+          # CI has to agree with that or it tests a different program.
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: pip install -e ".[dev,spark]"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Types
+        run: mypy
+
+      - name: Tests
+        # No database, no Kafka, no warehouse. Every test uses a fake
+        # connection or real payload bytes, which is why this needs no
+        # services block -- and why a green run here means the logic is
+        # right, not that the environment happened to be up.
+        run: pytest -q

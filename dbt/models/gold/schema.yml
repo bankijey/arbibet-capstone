@@ -1,0 +1,50 @@
+version: 2
+
+models:
+  - name: gold_market_efficiency
+    description: >
+      Cross-book best-price overround by week and market. Not per-bookmaker
+      vig: that needs one book's complete market, and the signal facts hold
+      the best price per outcome across books.
+    columns:
+      - name: week
+        tests: [not_null]
+      - name: market_base_id
+        tests:
+          - not_null
+          # WARN, not fail. dim_market is the 236-row CROSSWALK -- the markets
+          # the two dialect books can be translated onto -- but three books are
+          # betradar-native and price markets the crosswalk never covered, and
+          # cross-native arbitrage on those is real. The models already fall
+          # back to 'market <id>' for the name. A failure here took the DAG
+          # down on 3 Sep for a signal on market 60210 (FINDINGS 8e).
+          - relationships:
+              config:
+                severity: warn
+              arguments:
+                to: source('core', 'dim_market')
+                field: market_base_id
+      - name: signals
+        tests: [not_null]
+      - name: mean_overround
+        tests: [not_null]
+
+  - name: gold_slip_leg_history
+    description: >
+      Every booking-slip leg with the two sides' recent record on that exact
+      market. `historical_rate` is a base rate over the last ten matches and
+      ignores opponent strength -- recent form, not a probability for this
+      fixture.
+    columns:
+      - name: share_code
+        tests: [not_null]
+      - name: odds
+        tests: [not_null]
+      - name: classification
+        tests:
+          - accepted_values:
+              arguments:
+                values: [symmetric, directional, team_scoped_home, team_scoped_away, not_team_relevant]
+      - name: historical_rate
+        # Not not_null: "no history" is a real answer for a promoted side or a
+        # newly covered league, and must not be filled in with a zero.

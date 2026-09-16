@@ -1,0 +1,19 @@
+# Credentials come from the environment, never from this file. It is committed
+# so a clean clone can run dbt; .env is not.
+arbibet_capstone:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE', 'ACCOUNTADMIN') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE', 'ARBIBET_CAPSTONE') }}"
+      # dbt writes here; the pipeline's own tables live in CORE and are read
+      # through sources. Keeping the two apart means a dbt full-refresh can
+      # never drop a table a consumer writes.
+      schema: ANALYTICS
+      threads: 4
+      client_session_keep_alive: false

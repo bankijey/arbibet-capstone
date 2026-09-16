@@ -1,0 +1,16 @@
+# Committed deliberately: Streamlit Community Cloud reads this from the repo,
+# so a theme that lives only on the developer's machine is a theme the
+# published dashboard does not have.
+
+[theme]
+# Streamlit's default is 14px, which is a comfortable size for a tool you are
+# operating and too small for a page someone is READING -- and this page is
+# read, on a projector and over a video call. Everything else scales from
+# this, so it is one number rather than a pile of CSS overrides that would
+# break on the next Streamlit release.
+baseFontSize = 18
+
+[server]
+# Nothing is uploaded through the dashboard. Its only writes are a viewer
+# flagging a leg as not on the site (CORE.dashboard_leg_flag).
+maxUploadSize = 1

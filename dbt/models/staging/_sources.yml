@@ -1,0 +1,23 @@
+version: 2
+
+sources:
+  - name: core
+    database: ARBIBET_CAPSTONE
+    schema: CORE
+    description: >
+      Written by the pipeline, not by dbt: the consumers write the signal
+      facts, the Spark jobs write the history facts, and load_dims writes the
+      dimensions. dbt reads them through this source and never owns them.
+    tables:
+      - name: fact_arbitrage_signal
+      - name: fact_ev_signal
+      - name: fact_odds_tick
+      - name: fact_team_match
+      - name: fact_team_market_result
+      - name: dim_fixture
+      - name: dim_market
+      - name: dim_bookmaker
+      - name: dim_event_link
+      - name: fact_arbitrage_track
+      - name: dim_market_outcome
+      - name: bronze_slip_payload

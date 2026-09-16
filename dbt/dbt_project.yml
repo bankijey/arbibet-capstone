@@ -1,0 +1,39 @@
+name: arbibet_capstone
+version: "1.0.0"
+profile: arbibet_capstone
+
+model-paths: ["models"]
+target-path: "target"
+clean-targets: ["target", "dbt_packages"]
+
+# No +schema here. The profile already targets ANALYTICS, and dbt CONCATENATES
+# a custom schema onto the target one -- setting both produced
+# ANALYTICS_analytics and models that looked created but were not where
+# anything reads them.
+# Platform time, for the same reason the Python connector sets it: Snowflake's
+# session TIMEZONE defaults to America/Los_Angeles, and TIMESTAMP_TZ/LTZ are
+# rendered in it. dbt opens its own sessions, so setting it in the connector
+# does not reach here -- and a model that casts a timestamp to a DATE, or
+# compares one to a date literal, resolves that boundary in session time. Two
+# components disagreeing about midnight is a whole class of off-by-one.
+# The widest gap allowed between the oldest and newest price in an arbitrage.
+# Mirrors MAX_LEG_SPREAD_SECONDS in src/arbibet_capstone/signals.py, which now
+# REFUSES wider signals at detection; this applies the same bar to the rows
+# recorded before that rule existed. FINDINGS 13g.
+vars:
+  max_leg_spread_seconds: 300
+
+on-run-start:
+  - "alter session set timezone = 'Europe/Berlin'"
+
+models:
+  arbibet_capstone:
+    # Staging stays ephemeral-free and materialised as views: it is renaming
+    # and light filtering over facts the pipeline already wrote, so a table
+    # would be a second copy that can go stale.
+    staging:
+      +materialized: view
+    # Gold is materialised: the dashboard reads it on every page load, and a
+    # view would re-scan the facts each time a visitor opens the URL.
+    gold:
+      +materialized: table

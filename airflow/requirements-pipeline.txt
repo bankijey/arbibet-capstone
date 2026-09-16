@@ -1,0 +1,23 @@
+# Dependencies for the pipeline tasks, installed into a venv that is SEPARATE
+# from Airflow's own environment. Airflow pins a large dependency set; mixing
+# pyspark, dbt and the Snowflake connector into it is the classic way to break
+# an Airflow install. Tasks run as BashOperators against this interpreter, so
+# Airflow's environment stays untouched.
+# Everything in pyproject.toml's runtime dependencies must appear here, or a
+# task fails inside the container with a ModuleNotFoundError -- which is how
+# httpx and python-dotenv were found, when ingest_slips died three minutes into
+# a DAG run. `tests/test_packaging.py` fails the build when the two drift.
+pyspark>=4.0,<5
+httpx>=0.27,<1
+python-dotenv>=1.0,<2
+psycopg[binary]>=3.2,<4
+pandas>=2.2,<3
+numpy>=2,<3
+# The [pandas] extra is what write_pandas needs; plain pandas is not enough
+# and the failure is a MissingDependencyError at write time, not import time.
+snowflake-connector-python[pandas]>=3.12,<4
+confluent-kafka>=2.5,<3
+openai>=1.50
+# Pinned below 1.10: dbt-snowflake 1.10.x pulls dbt-core 2.0.0-beta as a
+# dependency, and a beta major version is not something to discover mid-sprint.
+dbt-snowflake>=1.9,<1.10

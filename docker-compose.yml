@@ -1,0 +1,126 @@
+# Local stack for the capstone.
+#
+# Airflow is added at Step 23 and will use the image built in Step 1
+# (arbibet-capstone-airflow:2.10.3). The upstream Arbibet databases are NOT
+# defined here -- they are someone else's services, already running, and this
+# project only reads them.
+
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    restart: unless-stopped
+    command:
+      - redpanda
+      - start
+      # Two listeners, because there are two kinds of client. A container
+      # (the Airflow tasks) must be told to come back to `redpanda:9092`; the
+      # host (a developer's shell, the watcher) must be told `localhost:19092`.
+      # A single listener advertised as localhost let host tools work and
+      # sent every container-side producer to its OWN localhost, where the
+      # connection was refused for five minutes and then silently dropped.
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
+      # 8 MiB batch ceiling, matching the producer's message.max.bytes and
+      # the topic's max.message.bytes. The default 1 MiB refused a single
+      # 1,624-market fixture snapshot and took the whole daily run down.
+      - --set
+      - redpanda.kafka_batch_max_bytes=8388608
+      # Single-node dev sizing. Redpanda assumes dedicated hardware by
+      # default; these tell it to share the box politely.
+      - --overprovisioned
+      - --smp=1
+      - --memory=1G
+      - --reserve-memory=0M
+      - --node-id=0
+      - --check=false
+    ports:
+      - "19092:19092"
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy:.*true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    # No volume on purpose. The topic is transport, not storage -- everything
+    # durable lands in Snowflake, and every message is reproducible by
+    # re-running the producer. A persisted log mostly makes message counts
+    # confusing across restarts while you are still debugging the producer.
+
+  # --- Airflow -------------------------------------------------------------
+  #
+  # LocalExecutor over a Postgres metadata DB rather than `airflow standalone`,
+  # which uses SequentialExecutor and would run this DAG's fan-out one task at
+  # a time. The graph branches on purpose; executing it serially would make the
+  # picture a lie.
+  airflow-db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_POSTGRES_PASSWORD:-airflow}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow"]
+      interval: 5s
+      retries: 10
+
+  airflow:
+    image: arbibet-capstone-airflow:2.10.3
+    restart: unless-stopped
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      # These four OVERRIDE what env_file just loaded, and each one has to.
+      #
+      # .env holds host-perspective values: a Windows JAVA_HOME that stops the
+      # JVM from starting inside a Linux container, a venv path that does not
+      # exist here, and localhost DSNs that point at the container itself. The
+      # container's own values win.
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      PYSPARK_PYTHON: /home/airflow/venv/bin/python
+      PYTHONPATH: /opt/project/src
+      SOURCES_DB_URL: ${SOURCES_DB_URL_CONTAINER}
+      MARKETS_DB_URL: ${MARKETS_DB_URL_CONTAINER}
+      INGESTOR_DB_URL: ${INGESTOR_DB_URL_CONTAINER}
+      KAFKA_BOOTSTRAP_SERVERS: ${KAFKA_BOOTSTRAP_SERVERS_CONTAINER:-redpanda:9092}
+
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/project/airflow/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: >-
+        postgresql+psycopg2://airflow:${AIRFLOW_POSTGRES_PASSWORD:-airflow}@airflow-db/airflow
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "False"
+      # The UI survives a slow start. `airflow standalone` runs the webserver as
+      # a child and does NOT respawn it: after a container recreate, gunicorn's
+      # master got no response within the default 120 s -- db migrate, the
+      # scheduler and four sync workers each importing the whole providers
+      # tree were all starting at once -- so Airflow shut the webserver down
+      # and the pipeline ran on for hours with no UI. Two workers are plenty
+      # for one person; the timeouts give a cold start room on a shared box.
+      AIRFLOW__WEBSERVER__WORKERS: "2"
+      AIRFLOW__WEBSERVER__WEB_SERVER_MASTER_TIMEOUT: "600"
+      AIRFLOW__WEBSERVER__WEB_SERVER_WORKER_TIMEOUT: "300"
+    ports:
+      - "8080:8080"
+    # Source is MOUNTED, not baked: a code change is not a rebuild, and only a
+    # dependency change needs `docker build`.
+    volumes:
+      - .:/opt/project
+      # Task logs, bound to the host rather than left inside the container.
+      # Without this they die with it: a failed run's logs were already
+      # unrecoverable, and `ingest_slips` showed only attempt=3 with no way to
+      # see what the first two attempts hit. A pipeline whose failures cannot
+      # be read afterwards is not debuggable.
+      - ./airflow/logs:/opt/airflow/logs
+    user: "${AIRFLOW_UID:-50000}:0"
+    command: >-
+      bash -c "airflow db migrate &&
+               airflow users create --username admin --password admin
+                 --firstname a --lastname b --role Admin --email a@b.c || true &&
+               airflow standalone"
+
+volumes:
+  airflow_db_data:

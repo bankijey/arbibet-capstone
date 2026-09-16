@@ -10,6 +10,8 @@ requires-python = ">=3.12"
 
 dependencies = [
     "psycopg[binary]>=3.2,<4",
+    "python-dotenv>=1.0,<2",
+    "httpx>=0.27,<1",
     "pandas==2.2.3",
     "numpy==2.1.2",
     "confluent-kafka>=2.5,<3",
@@ -18,10 +20,25 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# pyspark is an extra rather than a hard dependency: only the jobs under
+# `spark/` need it, and it is a 400 MB download nothing else uses. But it IS
+# declared, because CI type-checks those jobs and an undeclared import would
+# either fail on a clean install or be silenced with ignore_missing_imports --
+# which would make CI check a different program than the one that runs here.
+spark = ["pyspark>=4.0,<5"]
 dev = [
     "pytest==8.3.3",
     "ruff==0.6.9",
     "mypy==1.11.2",
+    # `docs/capture_screenshots.py` only. It drives the Chrome already on the
+    # machine (`channel="chrome"`), so `playwright install` is NOT needed and
+    # no browser is downloaded.
+    #
+    # Pinned to the version the committed screenshots were actually captured
+    # with. It was pinned at 1.48.0 while the venv had been given 1.62.0 by an
+    # unpinned `pip install`, so a fresh clone would have installed a
+    # playwright nobody had run this script against.
+    "playwright==1.62.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -40,7 +57,10 @@ select = ["E", "F", "I", "B", "UP", "W"]
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["src", "tests"]
+# Every directory this repo authors. CI runs a bare `mypy`, so the config has
+# to be the definition of what is checked -- a longer command line in a
+# workflow file is a second definition that drifts from what runs locally.
+files = ["src", "tests", "consumers", "producer", "snowflake", "spark", "slips"]
 explicit_package_bases = true
 mypy_path = "src"
 

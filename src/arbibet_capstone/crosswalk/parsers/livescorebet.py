@@ -11,10 +11,47 @@ from arbibet_capstone.crosswalk.models import Market, Outcome
 berlin = ZoneInfo("Europe/Berlin")
 
 
+def _canonical_line(row: "pd.Series") -> object:
+    """The line this selection belongs to, in the HOME team's frame.
+
+    Asian handicap (market 16) is published by livescorebet from each side's
+    own perspective: a fixture at home -0.5 shows "Burnley -0.5" AND
+    "Middlesbrough -0.5", where the away row means home +0.5. Every other book
+    states both sides in the home frame ("Home (-0.5)" / "Away (+0.5)").
+
+    Left un-negated, the away row lands in the wrong market and gets paired
+    with the opposite side of a DIFFERENT line -- which reads as a ~30%
+    arbitrage on a mainstream market at five books. The legacy implementation
+    negated it; the refactor into `parsers/` lost that, and this restores it.
+    """
+    sel = row["selections"]
+    if not isinstance(sel, dict):
+        return None
+    hcp = sel.get("hcp")
+    if hcp in (None, ""):
+        return None
+    try:
+        line = float(hcp)
+    except (TypeError, ValueError):
+        return hcp
+    if int(row["marketId"]) == 16 and sel.get("outcomeType") == "AWAY":
+        line = -line
+    # One representation, or the two sides of a line group separately: a raw
+    # string "-0.5" and a computed float -0.5 are different keys that format
+    # into the same market id. `:g` keeps the minimal form (0.5 -> "0.5",
+    # 1.0 -> "1"), which is what the betradar books publish.
+    return f"{line:g}"
+
+
 def parse_livescorebet(data: dict, market_mappings: pd.DataFrame) -> List[Market]:
     """Parse LiveScoreBet raw JSON into a list of Market objects."""
-    event_data = data.get("event", {})
-    markets_raw = event_data.get("markets", [])
+    # `.get(k, {})` returns None when the key EXISTS with a null value, so the
+    # default never fires. Books publish a well-formed 200 with a null body to
+    # mean "I do not have this fixture" -- a known shape meaning no markets,
+    # not an unknown shape. `or {}` keeps that distinction: this returns [],
+    # while a genuinely unrecognised payload still raises.
+    event_data = data.get("event") or {}
+    markets_raw = event_data.get("markets") or []
     if not markets_raw:
         return []
 
@@ -28,11 +65,18 @@ def parse_livescorebet(data: dict, market_mappings: pd.DataFrame) -> List[Market
     lsb = lsb.explode("selections").reset_index(drop=True)
     lsb["marketId"] = lsb["marketId"].astype("Int64")
 
-    # Group by marketId and build Market objects
+    # The handicap/line is part of the market's IDENTITY, so it has to be in
+    # the grouping key. Grouping on marketId alone folds every Over/Under line
+    # into one market and labels it with whichever line happened to come last:
+    # Over 0.5 (1.02) and Over 6.5 (21.0) both become outcome `12` of market
+    # `18;0.5`, and any best-price comparison then reports a ~7x arbitrage that
+    # does not exist. `dropna=False` keeps markets that have no line at all --
+    # 1X2, BTTS -- which pandas would otherwise drop silently.
+    lsb["hcp"] = lsb.apply(_canonical_line, axis=1)
+
     results = []
-    for market_id_raw, group in lsb.groupby("marketId"):
+    for (market_id_raw, hcp_value), group in lsb.groupby(["marketId", "hcp"], dropna=False):
         outcomes = []
-        hcp_value = None
 
         for _, row in group.iterrows():
             sel = row["selections"]
@@ -42,11 +86,6 @@ def parse_livescorebet(data: dict, market_mappings: pd.DataFrame) -> List[Market
             outcome = _map_lsb_outcome(int(market_id_raw), sel)
             if outcome is not None:
                 outcomes.append(outcome)
-
-            # Track handicap for market ID suffix
-            hcp = sel.get("hcp", None)
-            if hcp:
-                hcp_value = hcp
 
         if not outcomes:
             continue

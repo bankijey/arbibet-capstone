@@ -1,10 +1,13 @@
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from arbibet_capstone.bronze import latest_payloads
 
+_T0 = datetime(2026, 9, 2, 18, 30, tzinfo=UTC)
+
 
 class _FakeCursor:
-    def __init__(self, rows: list[tuple[str, bytes]]) -> None:
+    def __init__(self, rows: list[tuple[str, bytes, datetime]]) -> None:
         self._rows = rows
         self.params: tuple[object, ...] | None = None
 
@@ -22,7 +25,7 @@ class _FakeCursor:
 
 
 class _FakeConnection:
-    def __init__(self, rows: list[tuple[str, bytes]]) -> None:
+    def __init__(self, rows: list[tuple[str, bytes, datetime]]) -> None:
         self.cur = _FakeCursor(rows)
 
     def cursor(self) -> _FakeCursor:
@@ -32,7 +35,7 @@ class _FakeConnection:
 def test_bronze_bookmaker_names_are_returned_unchanged() -> None:
     # Bronze is downstream of arbibet-markets' alias map, so its spelling is
     # already canonical. The reader must not invent a second vocabulary.
-    conn = _FakeConnection([("msport", b"{}"), ("ilotbet", b"{}")])
+    conn = _FakeConnection([("msport", b"{}", _T0), ("ilotbet", b"{}", _T0)])
 
     result = latest_payloads(conn, uuid4())  # type: ignore[arg-type]
 
@@ -41,9 +44,21 @@ def test_bronze_bookmaker_names_are_returned_unchanged() -> None:
 
 def test_payload_bytes_are_returned_verbatim() -> None:
     body = b'{"D": {"O": {"S_1X2_1": 2.05}}}'
-    conn = _FakeConnection([("bet9ja", body)])
+    conn = _FakeConnection([("bet9ja", body, _T0)])
 
-    assert latest_payloads(conn, uuid4())["bet9ja"] == body  # type: ignore[arg-type]
+    assert latest_payloads(conn, uuid4())["bet9ja"].payload == body  # type: ignore[arg-type]
+
+
+def test_fire_time_travels_with_each_payload() -> None:
+    # Without this the arbitrage consumer cannot compute leg_spread_seconds,
+    # and a stale leg becomes indistinguishable from a fresh one.
+    older = datetime(2026, 9, 2, 18, 10, tzinfo=UTC)
+    conn = _FakeConnection([("sportybet", b"{}", _T0), ("bet9ja", b"{}", older)])
+
+    result = latest_payloads(conn, uuid4())  # type: ignore[arg-type]
+
+    assert result["sportybet"].fire_time == _T0
+    assert result["bet9ja"].fire_time == older
 
 
 def test_the_event_id_is_the_only_bound_parameter() -> None:
