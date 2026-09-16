@@ -11,6 +11,7 @@ second place for them to drift.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -71,8 +72,44 @@ def setting(name: str, default: str | None = None) -> str:
     return value
 
 
-@st.cache_resource
+# After a failed LOGIN, stop knocking for this long. `st.cache_resource` does
+# not cache exceptions, so without this every query, every fragment rerun and
+# the warmer thread each re-authenticated -- a wrong password in the hosted
+# app's secrets made a dozen attempts inside a minute, and Snowflake locks a
+# user for fifteen minutes after five. The lock then outlived the fix.
+CONNECT_BACKOFF = 300
+_LOGIN_FAILED: dict[str, float] = {}
+
+
+class WarehouseUnavailable(RuntimeError):
+    """The dashboard could not log in to Snowflake, and is not retrying yet."""
+
+
 def connection() -> Any:
+    """The shared Snowflake session, or `WarehouseUnavailable` during a backoff."""
+    failed_at = _LOGIN_FAILED.get("at")
+    if failed_at is not None and time.monotonic() - failed_at < CONNECT_BACKOFF:
+        raise WarehouseUnavailable(_LOGIN_FAILED_MESSAGE)
+    try:
+        conn = _connect()
+    except snowflake.connector.errors.Error as err:
+        _LOGIN_FAILED["at"] = time.monotonic()
+        # The connector's message names the account host, so it goes to the
+        # app's log for the owner, not onto a public page.
+        print(f"Snowflake login failed: {err}", file=sys.stderr)
+        raise WarehouseUnavailable(_LOGIN_FAILED_MESSAGE) from err
+    _LOGIN_FAILED.pop("at", None)
+    return conn
+
+
+_LOGIN_FAILED_MESSAGE = (
+    "The dashboard cannot log in to the warehouse right now. "
+    f"It will try again in {CONNECT_BACKOFF // 60} minutes."
+)
+
+
+@st.cache_resource(show_spinner=False)
+def _connect() -> Any:
     """One Snowflake session, reused across reruns and viewers.
 
     `client_session_keep_alive` is the whole reason this survives a night.
@@ -163,7 +200,7 @@ def _cached(sql: str, mark: str) -> pd.DataFrame:
     except snowflake.connector.errors.Error as err:
         if _EXPIRED_TOKEN not in f"{err}" and "token has expired" not in f"{err}".lower():
             raise
-        connection.clear()
+        _connect.clear()
         return _fetch(sql)
 
 
@@ -178,7 +215,13 @@ def query(sql: str, *, stable: bool = False) -> pd.DataFrame:
     _start_warmer()
     if not stable:
         _RECENT[sql] = time.monotonic()
-    return _cached(sql, "stable" if stable else watermark())
+    try:
+        return _cached(sql, "stable" if stable else watermark())
+    except WarehouseUnavailable as err:
+        # A readable message instead of a connector traceback, and stop the
+        # run here so the rest of the page does not queue more attempts.
+        st.error(str(err))
+        st.stop()
 
 
 # --- background warming ----------------------------------------------------------
@@ -219,6 +262,8 @@ def _warm_loop() -> None:
                 for fn in list(_WARMERS.values()):
                     fn(mark)
             last = mark
+        except WarehouseUnavailable:
+            continue
         except Exception:
             # Warming is an optimisation. A failure costs the next visitor a
             # cold load, never the page.
@@ -243,8 +288,12 @@ def execute(sql: str, params: tuple[Any, ...] = ()) -> None:
     The watermark is cleared afterwards so the page reflects the write on the
     rerun that follows, rather than up to a minute later.
     """
-    with connection().cursor() as cur:
-        cur.execute(sql, params)
+    try:
+        with connection().cursor() as cur:
+            cur.execute(sql, params)
+    except WarehouseUnavailable as err:
+        st.error(str(err))
+        st.stop()
     watermark.clear()
 
 
