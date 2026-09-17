@@ -117,6 +117,9 @@ def main() -> int:
     args = parser.parse_args()
 
     _logging()
+    # dbt, run in-process, reads the path from the environment; make it
+    # absolute so it opens this database and not a relative one of its own.
+    os.environ["DUCKDB_PATH"] = str(database_path().resolve())
     warehouse: Warehouse = connect()
     observer = Observer(warehouse)
     stop = threading.Event()
