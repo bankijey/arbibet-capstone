@@ -59,6 +59,17 @@ def _open() -> duckdb.DuckDBPyConnection:
             path.parent.mkdir(parents=True, exist_ok=True)
             conn = duckdb.connect(str(path))
             conn.execute(f"SET TimeZone = '{TIMEZONE}'")
+            # Bounded, and allowed to spill to disk. DuckDB's default is 80% of
+            # the memory it can see; inside Docker that is the whole VM shared
+            # with bronze's Postgres and the collectors, and parsing every slip
+            # payload's JSON (stg_slip_leg) ran it out at 6.1 GB. dbt runs in
+            # this process and shares these settings.
+            conn.execute(f"SET memory_limit = '{os.environ.get('DUCKDB_MEMORY_LIMIT', '3GB')}'")
+            conn.execute(f"SET threads = {int(os.environ.get('DUCKDB_THREADS', '2'))}")
+            conn.execute("SET preserve_insertion_order = false")
+            spill = path.parent / "tmp"
+            spill.mkdir(parents=True, exist_ok=True)
+            conn.execute(f"SET temp_directory = '{spill.as_posix()}'")
             conn.execute(DDL.read_text(encoding="utf-8"))
             _create_lake_views(conn)
             # Unqualified names resolve the way they did in Snowflake, where

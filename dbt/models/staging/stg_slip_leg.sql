@@ -64,24 +64,37 @@ legs as (
         s.last_fetched_at,
         -- 0-based, as Snowflake's FLATTEN index was; ORDINALITY counts from 1.
         l.idx - 1                                   as leg_index,
-        l.value ->> '$.event.eventId'               as sr_match_id,
-        l.value ->> '$.event.homeTeam'              as home_team,
-        l.value ->> '$.event.awayTeam'              as away_team,
-        l.value ->> '$.event.tournament'            as tournament,
+        l.leg.event.eventId                         as sr_match_id,
+        l.leg.event.homeTeam                        as home_team,
+        l.leg.event.awayTeam                        as away_team,
+        l.leg.event.tournament                      as tournament,
         -- Epoch milliseconds have no offset of their own; to_timestamp gives
         -- an instant, rendered in session time (Europe/Berlin).
-        to_timestamp((l.value ->> '$.event.startTime')::bigint / 1000) as kickoff_at,
-        l.value ->> '$.market.id'                   as market_id,
-        l.value ->> '$.market.specifiers'           as specifiers,
-        l.value ->> '$.outcome.id'                  as outcome_id,
-        l.value ->> '$.outcome.description'         as outcome_name,
-        (l.value ->> '$.outcome.odds')::double      as odds,
+        to_timestamp(l.leg.event.startTime / 1000)  as kickoff_at,
+        l.leg.market.id                             as market_id,
+        l.leg.market.specifiers                     as specifiers,
+        l.leg.outcome.id                            as outcome_id,
+        l.leg.outcome.description                   as outcome_name,
+        l.leg.outcome.odds                          as odds,
         -- msport's own model probability. It embeds their margin, and it is
         -- what the punter was shown, which makes it the right prior to judge
         -- the slip by even though it is not truth.
-        (l.value ->> '$.outcome.probability')::double as book_probability
+        l.leg.outcome.probability                   as book_probability
     from payload s,
-         unnest(cast(s.payload -> '$.bettableBetSlip' as json[])) with ordinality as l(value, idx)
+         -- json_transform into a typed list of structs holding ONLY the
+         -- fields used here. Casting the whole leg array to JSON[] parsed
+         -- every field of every leg into memory and ran the runner's DuckDB
+         -- out of memory at 6.1 GB (and still at a 3 GB cap, since JSON
+         -- parsing cannot spill to disk); the typed version fits and is faster.
+         unnest(json_transform(
+             s.payload -> '$.bettableBetSlip',
+             '[{"event": {"eventId": "VARCHAR", "homeTeam": "VARCHAR",
+                          "awayTeam": "VARCHAR", "tournament": "VARCHAR",
+                          "startTime": "BIGINT"},
+                "market": {"id": "VARCHAR", "specifiers": "VARCHAR"},
+                "outcome": {"id": "VARCHAR", "description": "VARCHAR",
+                            "odds": "DOUBLE", "probability": "DOUBLE"}}]'
+         )) with ordinality as l(leg, idx)
 )
 
 select
