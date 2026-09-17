@@ -13,7 +13,7 @@ RUN apt-get update \
 ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
 
 COPY runner/requirements.txt /tmp/requirements.txt
-RUN pip install --no-cache-dir -r /tmp/requirements.txt
+RUN pip install --no-cache-dir --timeout 300 --retries 5 -r /tmp/requirements.txt
 
 ENV PYTHONPATH=/opt/project/src:/opt/project \
     PYTHONUNBUFFERED=1 \
