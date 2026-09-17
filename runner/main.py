@@ -2,7 +2,8 @@
 
     listener thread   LISTEN on markets bronze; wakes the hot loop instantly
     hot thread        surebets and EV within seconds of a new price
-    main thread       warm cycle every 15 minutes, cold cycle daily at 06:00
+    main thread       warm cycle on a 15-minute clock, cold cycle daily at 06:00
+    telegram threads  alerts from the hot loop, commands (when a bot token is set)
 
 Why one process: the warehouse is a DuckDB file, and DuckDB lets a single
 process write to it. Every job runs here and shares one connection, so there
@@ -44,6 +45,8 @@ from runner.jobs import Job, cold_jobs, warm_jobs  # noqa: E402
 from runner.listener import BronzeListener  # noqa: E402
 from runner.observe import Observer  # noqa: E402
 from runner.serve import SignalPublisher  # noqa: E402
+from runner.telegram import TelegramService  # noqa: E402
+from runner.telegram import configured as telegram_configured  # noqa: E402
 
 load_env()
 log = logging.getLogger("runner")
@@ -73,15 +76,22 @@ def _logging() -> None:
 
 
 def run_cycle(loop: str, jobs: list[Job], observer: Observer, last_run: dict[str, datetime],
-              stop: threading.Event) -> None:
-    observer.beat(loop, "working")
+              stop: threading.Event, slot: datetime | None = None) -> None:
+    """Run each due job once, in order.
+
+    `slot` is the wall-clock time the cycle was scheduled for. A job's `every`
+    is judged slot to slot, not from when the job happened to start: a
+    30-minute job that started 20 s later in the previous cycle than in this
+    one would otherwise be 19 s "early" and wait a whole extra cycle.
+    """
+    observer.beat(loop, "working", slot=slot)
     started = time.monotonic()
     failed: list[str] = []
     for job in jobs:
         if stop.is_set():
             break
         key = f"{loop}.{job.name}"
-        now = datetime.now(UTC)
+        now = slot or datetime.now(UTC)
         if job.every and key in last_run and now - last_run[key] < job.every:
             continue
         observer.beat(loop, "working", job=job.name)
@@ -101,6 +111,26 @@ def run_cycle(loop: str, jobs: list[Job], observer: Observer, last_run: dict[str
         last_cycle_failed=failed,
         finished_at=datetime.now(UTC),
     )
+
+
+def _slot(now: datetime) -> datetime:
+    """The warm slot `now` falls in: wall-clock multiples of WARM_MINUTES (:00, :15, ...)."""
+    step = int(WARM_MINUTES * 60)
+    return datetime.fromtimestamp(int(now.timestamp()) // step * step, UTC)
+
+
+def _next_warm(slot: datetime, now: datetime) -> tuple[datetime, bool]:
+    """When the cycle after `slot` starts, and whether the previous one overran.
+
+    Cycles start on a fixed clock -- 15 minutes after the previous one STARTED,
+    not after it finished. One that runs past its successor's slot is followed
+    immediately, never overlapped (there is one main thread) and never queued
+    twice: missed slots collapse into the one now due.
+    """
+    following = slot + timedelta(minutes=WARM_MINUTES)
+    if following > now:
+        return following, False
+    return _slot(now), True
 
 
 def _next_cold(now: datetime) -> datetime:
@@ -144,13 +174,28 @@ def main() -> int:
     listener.start()
     publisher = SignalPublisher(warehouse, stop)
     publisher.start()
-    hot = HotLoop(warehouse, observer, listener, stop, on_signals=publisher.request)
+    telegram = None
+    if telegram_configured():
+        try:
+            telegram = TelegramService(warehouse, observer, stop)
+            telegram.start()
+        except Exception:
+            # The bot is an extra: a bad token or Telegram being unreachable
+            # must not stop the pipeline.
+            log.error("telegram bot did not start", exc_info=True)
+            observer.beat("telegram", "error", error="did not start; see runner log")
+            telegram = None
+    alerts = telegram.submit if telegram else None
+    hot = HotLoop(
+        warehouse, observer, listener, stop, on_signals=publisher.request, on_opportunities=alerts
+    )
     hot.start()
 
     observer.beat("runner", "started", pid=os.getpid(), started_at=datetime.now(UTC))
     log.info("runner started: warm every %.0f min, cold daily at %02d:00 Berlin",
              WARM_MINUTES, COLD_HOUR)
-    next_warm = datetime.now(UTC)
+    # The first cycle runs at once, as if scheduled for the current slot.
+    next_warm = _slot(datetime.now(UTC))
     next_cold = _next_cold(datetime.now(UTC))
     warm, cold = warm_jobs(warehouse), cold_jobs(warehouse, observer)
     schedule = {"next_warm": next_warm, "next_cold": next_cold}
@@ -171,7 +216,12 @@ def main() -> int:
             if not threads["hot"].is_alive() and not stop.is_set():
                 log.error("hot loop died; restarting it")
                 threads["hot"] = HotLoop(
-                    warehouse, observer, listener, stop, on_signals=publisher.request
+                    warehouse,
+                    observer,
+                    listener,
+                    stop,
+                    on_signals=publisher.request,
+                    on_opportunities=alerts,
                 )
                 threads["hot"].start()
             stop.wait(30)
@@ -183,8 +233,12 @@ def main() -> int:
             run_cycle("cold", cold, observer, last_run, stop)
             schedule["next_cold"] = _next_cold(datetime.now(UTC))
         elif now >= schedule["next_warm"]:
-            run_cycle("warm", warm, observer, last_run, stop)
-            schedule["next_warm"] = datetime.now(UTC) + timedelta(minutes=WARM_MINUTES)
+            # After a long cold cycle the scheduled slot may be long gone.
+            slot = max(schedule["next_warm"], _slot(now))
+            run_cycle("warm", warm, observer, last_run, stop, slot=slot)
+            schedule["next_warm"], overran = _next_warm(slot, datetime.now(UTC))
+            if overran:
+                log.warning("warm cycle for %s overran its slot; starting the next now", slot)
         stop.wait(5)
 
     threads["hot"].join(timeout=60)

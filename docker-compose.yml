@@ -133,10 +133,14 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Container-side values override the host ones .env holds, as for Airflow.
-      SOURCES_DB_URL: ${SOURCES_DB_URL_CONTAINER}
-      MARKETS_DB_URL: ${MARKETS_DB_URL_CONTAINER}
-      INGESTOR_DB_URL: ${INGESTOR_DB_URL_CONTAINER}
+      # Container-side values override the host ones .env holds. The runner
+      # reaches the source databases by container name over their own Docker
+      # networks (below): through host.docker.internal, bronze payloads moved at
+      # 0.8 MB/s -- 90 s for one fixture's history that arrives in 2.6 s direct.
+      # *_RUNNER falls back to the host.docker.internal values Airflow used.
+      SOURCES_DB_URL: ${SOURCES_DB_URL_RUNNER:-${SOURCES_DB_URL_CONTAINER}}
+      MARKETS_DB_URL: ${MARKETS_DB_URL_RUNNER:-${MARKETS_DB_URL_CONTAINER}}
+      INGESTOR_DB_URL: ${INGESTOR_DB_URL_RUNNER:-${INGESTOR_DB_URL_CONTAINER}}
       JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
       PYSPARK_PYTHON: /usr/local/bin/python
       DUCKDB_PATH: /data/arbibet.duckdb
@@ -148,6 +152,23 @@ services:
       - spark_ivy:/root/.ivy2
     # Time to finish the job in hand and checkpoint DuckDB on `docker stop`.
     stop_grace_period: 5m
+    networks:
+      - default
+      - markets
+      - scraper
+      - ingestor
+
+networks:
+  # The source platforms' own compose networks, joined rather than created.
+  markets:
+    name: arbibet-markets_default
+    external: true
+  scraper:
+    name: arbibet-scraper_default
+    external: true
+  ingestor:
+    name: api-football-ingestor_default
+    external: true
 
 volumes:
   airflow_db_data:

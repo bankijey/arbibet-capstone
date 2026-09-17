@@ -8,6 +8,7 @@ in order:
 2. Are signals fresh?          hot-loop latency: new price -> stored signal
 3. Is anything failing?        failed runs, with the error
 4. Is anything getting slow?   job durations over time
+5. Is the Telegram bot working? alerts sent, commands, errors
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ STALE_AFTER = {
     "hot": pd.Timedelta(minutes=3),
     "warm": pd.Timedelta(minutes=45),
     "cold": pd.Timedelta(hours=26),
+    "telegram": pd.Timedelta(minutes=3),
 }
 DESCRIPTION = {
     "runner": "the process itself",
@@ -42,6 +44,7 @@ DESCRIPTION = {
     "hot": "surebets and EV within seconds",
     "warm": "prices, slips, dbt, summaries, publishing — every 15 min",
     "cold": "match history, settlement, backups — daily 06:00",
+    "telegram": "surebet and EV alerts, and commands",
 }
 
 
@@ -54,6 +57,41 @@ def _detail(value: object) -> dict:
         except ValueError:
             return {}
     return {}
+
+
+def telegram_section(runs: pd.DataFrame, beats: pd.DataFrame, now: pd.Timestamp) -> None:
+    beat = beats[beats.COMPONENT == "telegram"]
+    if beat.empty:
+        return
+    st.subheader("Telegram bot")
+    activity = runs[runs.JOB == "telegram.activity"]
+    day = activity[pd.to_datetime(activity.STARTED_AT, utc=True) > now - pd.Timedelta(hours=24)]
+    details = [_detail(v) for v in day.DETAIL]
+    current = _detail(beat.DETAIL.iloc[0])
+    lags = [d["alert_lag_median_s"] for d in details if d.get("alert_lag_median_s") is not None]
+    m = st.columns(5)
+    m[0].metric(
+        "Subscribers", current.get("subscribers") if current.get("subscribers") is not None else "—"
+    )
+    m[1].metric(
+        "Alerts, last 24 h",
+        f"{sum(d.get('alerts_sent', 0) for d in details):,}",
+        help="Surebet and EV alerts delivered, counted per subscriber.",
+    )
+    m[2].metric(
+        "Alert lag",
+        f"{pd.Series(lags).median():.1f} s" if lags else "—",
+        help="Seconds from the newest price behind a signal to the alert being delivered.",
+    )
+    m[3].metric("Commands, last 24 h", f"{sum(d.get('commands', 0) for d in details):,}")
+    errors = sum(
+        d.get(k, 0)
+        for d in details
+        for k in ("command_errors", "send_errors", "alert_errors", "poll_errors")
+    )
+    m[4].metric("Errors, last 24 h", f"{errors:,}")
+    if current.get("last_error"):
+        st.caption(f"Last error: {current['last_error']}")
 
 
 @st.fragment(run_every=30)
@@ -121,6 +159,8 @@ def health() -> None:
                 use_container_width=True,
             )
 
+    telegram_section(runs, beats, now)
+
     st.subheader("Failures, last 48 hours")
     failed = runs[runs.STATUS == "failed"]
     if failed.empty:
@@ -140,7 +180,7 @@ def health() -> None:
         )
 
     st.subheader("Job durations")
-    batch = runs[(runs.LOOP != "hot") & runs.FINISHED_AT.notna()].copy()
+    batch = runs[~runs.LOOP.isin(["hot", "telegram"]) & runs.FINISHED_AT.notna()].copy()
     if batch.empty:
         st.caption("No warm or cold runs recorded yet.")
     else:

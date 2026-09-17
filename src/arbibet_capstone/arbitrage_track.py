@@ -39,6 +39,7 @@ from typing import Any, NamedTuple
 from arbibet_capstone.bronze import HistoricPayload
 from arbibet_capstone.crosswalk.parsers import PARSER_REGISTRY, parse_bookmaker
 from arbibet_capstone.fixtures import Fixture
+from arbibet_capstone.priority import yield_to_hot
 from arbibet_capstone.signals import MAX_LEG_SPREAD_SECONDS, arbitrage_rows
 from arbibet_capstone.snapshot import BookQuote, Snapshot
 
@@ -121,6 +122,7 @@ def replay(
     last_fire: datetime | None = None
 
     for record in sorted(history, key=lambda r: r.fire_time):
+        yield_to_hot()
         if not absorb(record):
             continue
         last_fire = record.fire_time

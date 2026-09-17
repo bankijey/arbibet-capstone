@@ -23,7 +23,8 @@ on every run, so growth is visible before it is a problem.
 
 FRESHNESS. The warm loop publishes everything every 15 minutes. The hot loop
 additionally asks for the 'signals' document after writing new signals; those
-requests are coalesced to at most one publish every 30 seconds.
+requests are coalesced to at most one publish every 30 seconds. Heartbeats and
+changed job runs are mirrored every minute.
 """
 
 from __future__ import annotations
@@ -282,36 +283,60 @@ def publish(warehouse: Warehouse, run: Any, full: bool = False) -> int:
     return written
 
 
-def _publish_ops(warehouse: Warehouse, conn: psycopg.Connection) -> int:
-    since = datetime.now(UTC) - OPS_RETENTION
+_RUN_UPSERT = """
+    INSERT INTO ops.job_run VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    ON CONFLICT (run_id) DO UPDATE SET finished_at = EXCLUDED.finished_at,
+      status = EXCLUDED.status, rows_written = EXCLUDED.rows_written,
+      detail = EXCLUDED.detail, error = EXCLUDED.error
+"""
+
+
+def _mirror_runs(warehouse: Warehouse, conn: psycopg.Connection, changed_since: datetime) -> int:
+    """Upsert the job runs that started or finished since `changed_since`, and any still running.
+
+    Changed rows only: a minute's worth is a handful, where the whole 7-day
+    window is ~15,000 rows.
+    """
     runs = warehouse.query(
         "SELECT run_id, job, loop, trigger, started_at, finished_at, status, rows_written, "
-        "detail::varchar AS detail, error FROM ops.job_run WHERE started_at >= %s",
-        (since,),
+        "detail::varchar AS detail, error FROM ops.job_run "
+        "WHERE started_at >= %s "
+        "AND (coalesce(finished_at, started_at) >= %s OR status = 'running')",
+        (datetime.now(UTC) - OPS_RETENTION, changed_since),
     )
+    if runs.empty:
+        return 0
+    rows = [
+        (
+            r.RUN_ID, r.JOB, r.LOOP, r.TRIGGER, _ts(r.STARTED_AT), _ts(r.FINISHED_AT), r.STATUS,
+            None if pd.isna(r.ROWS_WRITTEN) else int(r.ROWS_WRITTEN),
+            Jsonb(json.loads(r.DETAIL)) if isinstance(r.DETAIL, str) else None,
+            r.ERROR if isinstance(r.ERROR, str) else None,
+        )
+        for r in runs.itertuples(index=False)
+    ]
+    with conn.transaction(), conn.cursor() as cur:
+        cur.executemany(_RUN_UPSERT, rows)
+    return len(rows)
+
+
+def _mirror_beats(warehouse: Warehouse, conn: psycopg.Connection) -> None:
     beats = warehouse.query(
         "SELECT component, beat_at, state, detail::varchar AS detail FROM ops.heartbeat"
     )
     with conn.transaction():
-        for r in runs.itertuples(index=False):
-            conn.execute(
-                """
-                INSERT INTO ops.job_run VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (run_id) DO UPDATE SET finished_at = EXCLUDED.finished_at,
-                  status = EXCLUDED.status, rows_written = EXCLUDED.rows_written,
-                  detail = EXCLUDED.detail, error = EXCLUDED.error
-                """,
-                (
-                    r.RUN_ID, r.JOB, r.LOOP, r.TRIGGER, _ts(r.STARTED_AT), _ts(r.FINISHED_AT),
-                    r.STATUS, None if pd.isna(r.ROWS_WRITTEN) else int(r.ROWS_WRITTEN),
-                    Jsonb(json.loads(r.DETAIL)) if isinstance(r.DETAIL, str) else None,
-                    r.ERROR if isinstance(r.ERROR, str) else None,
-                ),
-            )
         for b in beats.itertuples(index=False):
             _beat(conn, b.COMPONENT, _ts(b.BEAT_AT), b.STATE, b.DETAIL)
-        conn.execute("DELETE FROM ops.job_run WHERE started_at < %s", (since,))
-    return len(runs)
+
+
+def _publish_ops(warehouse: Warehouse, conn: psycopg.Connection) -> int:
+    """The warm publish's backstop for anything the minute mirror missed, and retention."""
+    written = _mirror_runs(warehouse, conn, datetime.now(UTC) - timedelta(hours=2))
+    _mirror_beats(warehouse, conn)
+    conn.execute(
+        "DELETE FROM ops.job_run WHERE started_at < %s", (datetime.now(UTC) - OPS_RETENTION,)
+    )
+    return written
 
 
 def _ts(value: Any) -> datetime | None:
@@ -332,24 +357,37 @@ def _beat(conn: psycopg.Connection, component: str, at: Any, state: Any, detail:
 class SignalPublisher(threading.Thread):
     """Coalesces the hot loop's 'signals changed' requests into a publish at most every 30 s.
 
-    Also pushes heartbeats every minute, so the health page can tell a quiet
-    market from a dead runner between warm cycles.
+    Also mirrors the pipeline's own record every minute -- heartbeats, and the
+    job runs that started or finished since the last mirror -- so the Pipeline
+    health page is a minute behind the runner, not a warm cycle behind.
     """
+
+    OPS_SECONDS = 60.0
 
     def __init__(self, warehouse: Warehouse, stop: threading.Event) -> None:
         super().__init__(name="serve", daemon=True)
         self.warehouse = warehouse
         self.stop = stop
         self.requested = threading.Event()
+        # Where the next job-run mirror resumes; the first one covers the window.
+        self.runs_since = datetime.now(UTC) - OPS_RETENTION
 
     def request(self, _rows: int = 0) -> None:
         self.requested.set()
 
+    def mirror_ops(self, conn: psycopg.Connection) -> int:
+        # A little overlap: a row finishing while the query runs must not be skipped.
+        started = datetime.now(UTC) - timedelta(seconds=30)
+        runs = _mirror_runs(self.warehouse, conn, self.runs_since)
+        _mirror_beats(self.warehouse, conn)
+        self.runs_since = started
+        return runs
+
     def run(self) -> None:
         last_publish = 0.0
-        last_beats = 0.0
+        last_ops = 0.0
         while not self.stop.is_set():
-            self.requested.wait(timeout=60)
+            self.requested.wait(timeout=self.OPS_SECONDS)
             if not configured():
                 self.requested.clear()
                 continue
@@ -363,14 +401,9 @@ class SignalPublisher(threading.Thread):
                         log.info("signals document %s", "published" if changed else "unchanged")
                     elif self.requested.is_set():
                         self.stop.wait(wait)
-                    if time.monotonic() - last_beats >= 60:
-                        beats = self.warehouse.query(
-                            "SELECT component, beat_at, state, detail::varchar AS detail "
-                            "FROM ops.heartbeat"
-                        )
-                        for b in beats.itertuples(index=False):
-                            _beat(conn, b.COMPONENT, _ts(b.BEAT_AT), b.STATE, b.DETAIL)
-                        last_beats = time.monotonic()
+                    if time.monotonic() - last_ops >= self.OPS_SECONDS:
+                        self.mirror_ops(conn)
+                        last_ops = time.monotonic()
             except Exception:
                 log.warning("serving publish failed; will retry", exc_info=True)
                 self.stop.wait(30)

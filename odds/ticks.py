@@ -1,6 +1,6 @@
 """Backfill `fact_odds_tick` for the markets that produced signals.
 
-    bronze payload history -> crosswalk -> price changes -> Snowflake
+    bronze payload history -> crosswalk -> price changes -> the warehouse
 
 Run:
     python odds/ticks.py
@@ -36,6 +36,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import time
 from collections import defaultdict
 from datetime import datetime
 from uuid import UUID
@@ -134,10 +135,19 @@ def main() -> int:
     mappings = market_mappings()
     rows: list[dict[str, object]] = []
     skipped = 0
+    # Where the time goes. Transfer dominated before the runner joined the
+    # markets database's Docker network: 0.8 MB/s through host.docker.internal
+    # against ~30 MB/s direct, for payloads of ~300 KB each.
+    fetch_seconds = parse_seconds = 0.0
+    payloads = megabytes = 0
 
     with bronze.connect() as source:
         for event_id in fixtures:
+            started = time.monotonic()
             history = bronze.payload_history(source, UUID(event_id), cursors.get(event_id))
+            fetch_seconds += time.monotonic() - started
+            payloads += len(history)
+            megabytes += sum(len(h.payload) for h in history)
             if not history:
                 # Two very different reasons, and only one is worth a warning.
                 # An incremental run reaching a fixture whose prices have not
@@ -148,9 +158,11 @@ def main() -> int:
                     log.warning("no bronze history for %s (pruned?)", event_id)
                 continue
 
+            started = time.monotonic()
             extraction = price_changes(
                 history, wanted[event_id], mappings, seeds.get(event_id)
             )
+            parse_seconds += time.monotonic() - started
             skipped += extraction.failed_payloads
 
             for tick in extraction.ticks:
@@ -173,6 +185,10 @@ def main() -> int:
                 "" if full_replay or event_id in cursors else " (first pass)",
             )
 
+    log.info(
+        "payloads=%d mb=%.0f fetch=%.0fs parse=%.0fs",
+        payloads, megabytes / 1e6, fetch_seconds, parse_seconds,
+    )
     if not rows:
         log.warning("no ticks extracted")
         return 0

@@ -38,6 +38,7 @@ from uuid import UUID
 
 from arbibet_capstone import bronze, fixtures
 from arbibet_capstone.fixtures import Fixture
+from arbibet_capstone.priority import hot_work
 from arbibet_capstone.signals import arbitrage_rows, ev_rows
 from arbibet_capstone.snapshot import build
 from arbibet_capstone.warehouse import Warehouse, bookmaker_ids, merge_bulk
@@ -73,6 +74,7 @@ class HotLoop(threading.Thread):
         listener: BronzeListener,
         stop: threading.Event,
         on_signals: Any = None,
+        on_opportunities: Any = None,
     ) -> None:
         super().__init__(name="hot", daemon=True)
         self.warehouse = warehouse
@@ -81,6 +83,9 @@ class HotLoop(threading.Thread):
         self.stop = stop
         # Called with the number of rows written, so serving can be refreshed.
         self.on_signals = on_signals
+        # Called with (fixture, snapshot, arbitrage rows, EV rows) after each
+        # fixture is stored: the Telegram alerter's hook. Must not block.
+        self.on_opportunities = on_opportunities
         self.watched: dict[UUID, Fixture] = {}
         self.seen: dict[UUID, datetime] = {}
         self._stats = self._fresh_stats()
@@ -112,6 +117,13 @@ class HotLoop(threading.Thread):
     def _recompute(
         self, bronze_conn: Any, books: dict[str, int], event_ids: list[UUID], notified: bool
     ) -> int:
+        # Warm jobs give way while this runs (arbibet_capstone.priority).
+        with hot_work():
+            return self._recompute_all(bronze_conn, books, event_ids, notified)
+
+    def _recompute_all(
+        self, bronze_conn: Any, books: dict[str, int], event_ids: list[UUID], notified: bool
+    ) -> int:
         written = 0
         latest = bronze.latest_write_times(bronze_conn, event_ids)
         for event_id in event_ids:
@@ -124,6 +136,11 @@ class HotLoop(threading.Thread):
                 arb = arbitrage_rows(snapshot, threshold=ARB_THRESHOLD)
                 ev = ev_rows(snapshot, min_ev=EV_MIN, min_probability=EV_MIN_PROBABILITY)
                 written += self._write(books, arb, ev)
+                if self.on_opportunities and (arb or ev):
+                    try:
+                        self.on_opportunities(fixture, snapshot, arb, ev)
+                    except Exception:
+                        log.warning("opportunity hook failed", exc_info=True)
             except Exception:
                 # One fixture's bad payload is not the loop's problem; not
                 # advancing `seen` means the next poll retries it.

@@ -28,6 +28,7 @@ from typing import Any, NamedTuple
 
 from arbibet_capstone.bronze import HistoricPayload
 from arbibet_capstone.crosswalk.parsers import PARSER_REGISTRY, parse_bookmaker
+from arbibet_capstone.priority import yield_to_hot
 
 
 class Tick(NamedTuple):
@@ -109,6 +110,8 @@ def price_changes(
     for record in history:
         if record.bookmaker not in PARSER_REGISTRY:
             continue
+        # A payload is ~300 KB of JSON: give way to the hot loop between them.
+        yield_to_hot()
 
         try:
             markets = parse_bookmaker(
