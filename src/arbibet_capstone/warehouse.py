@@ -80,7 +80,7 @@ class Cursor:
     def _sql(sql: str, params: Any) -> str:
         return sql.replace("%s", "?") if params is not None else sql
 
-    _DML = re.compile(r"^\s*(UPDATE|DELETE|INSERT|MERGE)", re.IGNORECASE)
+    _DML = re.compile(r"^\s*(UPDATE|DELETE|INSERT|MERGE)\b", re.IGNORECASE)
 
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> Cursor:
         if params is None:
@@ -480,7 +480,8 @@ def compact_slips(conn: Warehouse) -> int:
                 continue
             target = month / "compacted.parquet.tmp"
             raw.execute(
-                f"COPY (SELECT * FROM read_parquet('{_parquet(month)}/*.parquet', union_by_name = true) "
+                f"COPY (SELECT * FROM read_parquet('{_parquet(month)}/*.parquet', "
+                "union_by_name = true) "
                 f"ORDER BY share_code, last_fetched_at) TO '{_parquet(target)}' "
                 "(FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)"
             )

@@ -47,7 +47,8 @@ def main() -> int:
     targets = [
         name
         for (name,) in wh.raw.execute(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'core' ORDER BY 1"
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'core' ORDER BY 1"
         ).fetchall()
         if not wanted or name.lower() in wanted
     ]

@@ -81,13 +81,30 @@ def _env(values: dict[str, str]):
                 os.environ[k] = v
 
 
-def script(relative: str, *args: Any, env: dict[str, str] | None = None) -> Callable[[Run], None]:
+def script(
+    relative: str,
+    *args: Any,
+    env: dict[str, str] | None = None,
+    returns_rows: bool = False,
+) -> Callable[[Run], None]:
+    """Run a pipeline script's `main()`.
+
+    Most return an exit code (0 is success). `returns_rows` is for the few that
+    return how many rows they wrote instead -- odds/ticks.py -- where any
+    non-negative number is success.
+    """
+
     def job(run: Run) -> None:
         with _env(env or {}):
-            code = _script(relative).main(*args)
-        run.detail["exit_code"] = code
-        if code not in (None, 0):
-            raise RuntimeError(f"{relative} exited with {code}")
+            result = _script(relative).main(*args)
+        if returns_rows:
+            run.rows_written = result
+            if result is not None and result < 0:
+                raise RuntimeError(f"{relative} returned {result}")
+            return
+        run.detail["exit_code"] = result
+        if result not in (None, 0):
+            raise RuntimeError(f"{relative} exited with {result}")
 
     return job
 
@@ -182,7 +199,7 @@ def warm_jobs(warehouse: Warehouse) -> list[Job]:
     return [
         Job("load_dims", script("snowflake/load_dims.py", 7.0, 7.0), every=timedelta(hours=1)),
         Job("ingest_slips", script("slips/ingest.py"), every=timedelta(minutes=30)),
-        Job("extract_ticks", script("odds/ticks.py")),
+        Job("extract_ticks", script("odds/ticks.py", returns_rows=True)),
         Job("track_arbitrage", script("odds/arbitrage_track.py")),
         Job("live_state", script("odds/live_state.py")),
         Job("dbt_run", dbt("run")),
