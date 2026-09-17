@@ -151,5 +151,9 @@ services:
 
 volumes:
   airflow_db_data:
+  # Named explicitly, so the warehouse is the same volume whichever directory
+  # compose is run from (compose otherwise prefixes the folder name).
   warehouse:
+    name: arbibet-warehouse
   spark_ivy:
+    name: arbibet-spark-ivy

@@ -100,6 +100,46 @@ CREATE TABLE IF NOT EXISTS ops.heartbeat (
     state         text,
     detail        jsonb
 );
+
+-- Row-level security on every serving table, with policies that give the
+-- dashboard's login (sql/supabase_dashboard_role.sql) exactly what its grants
+-- say: read everything, and insert or update flags. The runner connects as
+-- the tables' owner, which RLS does not restrict unless FORCEd.
+DO $$
+DECLARE
+    t record;
+    has_reader boolean := EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dashboard_reader');
+BEGIN
+    FOR t IN
+        SELECT n.nspname AS schema_name, c.relname AS table_name
+        FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE c.relkind = 'r' AND n.nspname IN ('serving', 'ops')
+    LOOP
+        EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY', t.schema_name, t.table_name);
+        IF has_reader AND NOT EXISTS (
+            SELECT 1 FROM pg_policies
+            WHERE schemaname = t.schema_name AND tablename = t.table_name
+              AND policyname = 'dashboard_reader_select'
+        ) THEN
+            EXECUTE format(
+                'CREATE POLICY dashboard_reader_select ON %I.%I '
+                'FOR SELECT TO dashboard_reader USING (true)',
+                t.schema_name, t.table_name
+            );
+        END IF;
+    END LOOP;
+    IF has_reader AND NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'serving' AND tablename = 'leg_flag'
+          AND policyname = 'dashboard_reader_flag_insert'
+    ) THEN
+        CREATE POLICY dashboard_reader_flag_insert ON serving.leg_flag
+            FOR INSERT TO dashboard_reader WITH CHECK (true);
+        CREATE POLICY dashboard_reader_flag_update ON serving.leg_flag
+            FOR UPDATE TO dashboard_reader USING (true) WITH CHECK (true);
+    END IF;
+END
+$$;
 """
 
 
