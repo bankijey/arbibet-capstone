@@ -686,7 +686,7 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
             FROM ANALYTICS.stg_odds_tick
             WHERE event_id IN ({ids})
             GROUP BY 1, 2
-            QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY count(*) DESC)
+            QUALIFY row_number() OVER (PARTITION BY event_id ORDER BY count(*) DESC, market_id)
                 <= {DIVE_MARKETS}
         )
         SELECT t.event_id, t.market_id, t.market_name, t.line, t.outcome, t.bookmaker_name,
@@ -796,7 +796,9 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
         event_ticks = ticks_by_event.get(f.EVENT_ID)
         if event_ticks is not None:
             for market_id, market in sorted(
-                event_ticks.groupby("MARKET_ID"), key=lambda kv: -int(kv[1].N.iloc[0])
+                # Ties broken by id: the snapshot must be identical build to build, or
+                # the serving publisher sees a change that is not one.
+                event_ticks.groupby("MARKET_ID"), key=lambda kv: (-int(kv[1].N.iloc[0]), kv[0])
             ):
                 reduced = reduce_steps(
                     market, x="FIRE_TIME", y="ODDS", by=["OUTCOME", "BOOKMAKER_NAME"], points=POINTS
@@ -855,7 +857,10 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
                     )
                 ]
             dive["settled"] = sorted(
-                dive["settled"], key=lambda s: (-s["landed"] / s["of"], -s["of"])
+                dive["settled"],
+                key=lambda s: (
+                    -s["landed"] / s["of"], -s["of"], s["side"], s["market"], s["period"], s["pick"]
+                ),
             )[:40]
         event_picks = picks_by_event.get(f.EVENT_ID)
         if event_picks is not None:
@@ -878,7 +883,7 @@ def punters(picks: pd.DataFrame) -> dict[str, Any]:
             MATCHES=("HISTORY_MATCHES", "first"),
             RESULT=("RESOLUTION", "first"),
         )
-        .sort_values(["SLIPS", "COPIES"], ascending=False)
+        .sort_values(["SLIPS", "COPIES", "PICK"], ascending=[False, False, True])
     )
     return {
         "slips": len(per_slip),
