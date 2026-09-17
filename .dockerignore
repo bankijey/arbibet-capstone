@@ -1,0 +1,9 @@
+# The runner image copies only runner/requirements.txt; everything else is mounted.
+data/
+web/
+.venv/
+**/__pycache__/
+dbt/target/
+dbt/logs/
+airflow/logs/
+.git/

@@ -109,7 +109,9 @@ class HotLoop(threading.Thread):
         self.watched = {f.event_id: f for f in window if f.kickoff > now}
         self.seen = {e: w for e, w in self.seen.items() if e in self.watched}
 
-    def _recompute(self, bronze_conn: Any, books: dict[str, int], event_ids: list[UUID]) -> int:
+    def _recompute(
+        self, bronze_conn: Any, books: dict[str, int], event_ids: list[UUID], notified: bool
+    ) -> int:
         written = 0
         latest = bronze.latest_write_times(bronze_conn, event_ids)
         for event_id in event_ids:
@@ -131,9 +133,12 @@ class HotLoop(threading.Thread):
             self._stats["fixtures"] += 1
             if event_id in latest:
                 self.seen[event_id] = latest[event_id]
-                self._stats["latencies"].append(
-                    (datetime.now(UTC) - latest[event_id]).total_seconds()
-                )
+                # Latency only for notified recomputes: a poll after a restart
+                # would count however long the runner was down.
+                if notified:
+                    self._stats["latencies"].append(
+                        (datetime.now(UTC) - latest[event_id]).total_seconds()
+                    )
         return written
 
     def _write(self, books: dict[str, int], arb: list[dict], ev: list[dict]) -> int:
@@ -215,7 +220,7 @@ class HotLoop(threading.Thread):
                         self._stats["notified_ignored"] += len(ids) - len(targets)
                         if targets:
                             self._stats["wakes_notify"] += 1
-                            written += self._recompute(bronze_conn, books, targets)
+                            written += self._recompute(bronze_conn, books, targets, notified=True)
 
                     if time.monotonic() - last_poll >= POLL_SECONDS:
                         last_poll = time.monotonic()
@@ -231,7 +236,9 @@ class HotLoop(threading.Thread):
                             changed = [e for e, w in latest.items() if self.seen.get(e) != w]
                             if changed:
                                 self._stats["wakes_poll"] += 1
-                                written += self._recompute(bronze_conn, books, changed)
+                                written += self._recompute(
+                                    bronze_conn, books, changed, notified=False
+                                )
 
                     if written and self.on_signals:
                         self.on_signals(written)
