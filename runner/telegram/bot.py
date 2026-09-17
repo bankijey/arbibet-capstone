@@ -742,6 +742,9 @@ class Bot(threading.Thread):
             try:
                 updates = self.api.get_updates(offset)
             except TelegramError as err:
+                if err.code is None and "timed out" in err.description:
+                    # A long poll outliving the network's patience: normal, not an error.
+                    continue
                 self.stats["poll_errors"] = self.stats.get("poll_errors", 0) + 1
                 self.stats["last_error"] = str(err)[:300]
                 log.warning("telegram poll failed: %s", err)

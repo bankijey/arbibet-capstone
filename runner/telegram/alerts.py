@@ -61,19 +61,31 @@ class Alerter(threading.Thread):
         self.warehouse = warehouse
         self.stats = stats
         self.stop = stop
-        self.queue: queue.Queue[tuple[Fixture, Any, list[dict], list[dict]]] = queue.Queue(1000)
+        self.queue: queue.Queue[tuple[Any, ...]] = queue.Queue(1000)
         self.ledger = Ledger()
         self._markets: tuple[float, dict[str, str]] = (0.0, {})
         self._subscribers: tuple[float, list[Any]] = (0.0, [])
 
     # --- called from the hot loop -------------------------------------------------------
 
-    def submit(self, fixture: Fixture, snapshot: Any, arb: list[dict], ev: list[dict]) -> None:
-        """Hand over one recompute. Never blocks and never raises."""
+    def submit(
+        self,
+        fixture: Fixture,
+        snapshot: Any,
+        arb: list[dict],
+        ev: list[dict],
+        written_at: datetime | None = None,
+    ) -> None:
+        """Hand over one recompute. Never blocks and never raises.
+
+        `written_at` is when bronze stored the payload that triggered it: alert
+        lag is measured from there, like the hot loop's own latency. (From the
+        book's fire_time it would include the collectors' delay in writing.)
+        """
         if not any(r.get("arbitrage", 0) > 1 for r in arb) and not ev:
             return
         try:
-            self.queue.put_nowait((fixture, snapshot, arb, ev))
+            self.queue.put_nowait((fixture, snapshot, arb, ev, written_at))
         except queue.Full:
             self.stats["alerts_dropped"] = self.stats.get("alerts_dropped", 0) + 1
 
@@ -181,7 +193,14 @@ class Alerter(threading.Thread):
 
     # --- sending ---------------------------------------------------------------------------
 
-    def handle(self, fixture: Fixture, snapshot: Any, arb: list[dict], ev: list[dict]) -> int:
+    def handle(
+        self,
+        fixture: Fixture,
+        snapshot: Any,
+        arb: list[dict],
+        ev: list[dict],
+        written_at: datetime | None = None,
+    ) -> int:
         now = datetime.now(UTC)
         subscribers = self._subscribers_now()
         if not subscribers:
@@ -219,8 +238,9 @@ class Alerter(threading.Thread):
                 kind = "alerts_surebet" if opp.kind == "surebet" else "alerts_ev"
                 self.stats[kind] = self.stats.get(kind, 0) + 1
                 self.stats["alerts_sent"] = self.stats.get("alerts_sent", 0) + 1
-                lag = (datetime.now(UTC) - opp.detected_at).total_seconds()
-                self.stats.setdefault("alert_lag_s", []).append(round(lag, 1))
+                if written_at is not None:
+                    lag = (datetime.now(UTC) - written_at).total_seconds()
+                    self.stats.setdefault("alert_lag_s", []).append(round(lag, 1))
         return sent
 
     def run(self) -> None:

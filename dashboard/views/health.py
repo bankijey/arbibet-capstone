@@ -81,7 +81,7 @@ def telegram_section(runs: pd.DataFrame, beats: pd.DataFrame, now: pd.Timestamp)
     m[2].metric(
         "Alert lag",
         f"{pd.Series(lags).median():.1f} s" if lags else "—",
-        help="Seconds from the newest price behind a signal to the alert being delivered.",
+        help="Seconds from bronze storing the price to the alert being delivered.",
     )
     m[3].metric("Commands, last 24 h", f"{sum(d.get('commands', 0) for d in details):,}")
     errors = sum(

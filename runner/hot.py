@@ -83,8 +83,9 @@ class HotLoop(threading.Thread):
         self.stop = stop
         # Called with the number of rows written, so serving can be refreshed.
         self.on_signals = on_signals
-        # Called with (fixture, snapshot, arbitrage rows, EV rows) after each
-        # fixture is stored: the Telegram alerter's hook. Must not block.
+        # Called with (fixture, snapshot, arbitrage rows, EV rows, when bronze
+        # wrote the newest payload) after each fixture is stored: the Telegram
+        # alerter's hook. Must not block.
         self.on_opportunities = on_opportunities
         self.watched: dict[UUID, Fixture] = {}
         self.seen: dict[UUID, datetime] = {}
@@ -138,7 +139,7 @@ class HotLoop(threading.Thread):
                 written += self._write(books, arb, ev)
                 if self.on_opportunities and (arb or ev):
                     try:
-                        self.on_opportunities(fixture, snapshot, arb, ev)
+                        self.on_opportunities(fixture, snapshot, arb, ev, latest.get(event_id))
                     except Exception:
                         log.warning("opportunity hook failed", exc_info=True)
             except Exception:
@@ -218,7 +219,9 @@ class HotLoop(threading.Thread):
         primed = False
         log.info(
             "hot loop: notify for the next %.0fh, %.0fs poll for the next %.0fh",
-            WATCH_HOURS, POLL_SECONDS, POLL_HOURS,
+            WATCH_HOURS,
+            POLL_SECONDS,
+            POLL_HOURS,
         )
         try:
             while not self.stop.is_set():

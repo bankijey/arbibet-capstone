@@ -245,9 +245,7 @@ def publish(warehouse: Warehouse, run: Any, full: bool = False) -> int:
         if not popular.empty:
             popular["kickoff"] = pd.to_datetime(popular.kickoffAt, utc=True)
             recent = popular[popular.kickoff > now - DIVE_RETENTION]
-            digests = dict(
-                conn.execute("SELECT event_id, digest FROM serving.dive").fetchall()
-            )
+            digests = dict(conn.execute("SELECT event_id, digest FROM serving.dive").fetchall())
             if not full:
                 live = recent.kickoff > now - timedelta(days=3)
                 missing = ~recent.eventId.isin(list(digests))
@@ -272,9 +270,7 @@ def publish(warehouse: Warehouse, run: Any, full: bool = False) -> int:
                             (event_id, dive["kickoffAt"], digest, Jsonb(dive)),
                         )
                         dives_written += 1
-        conn.execute(
-            "DELETE FROM serving.dive WHERE kickoff_at < %s", (now - DIVE_RETENTION,)
-        )
+        conn.execute("DELETE FROM serving.dive WHERE kickoff_at < %s", (now - DIVE_RETENTION,))
         written += dives_written
 
         written += _publish_ops(warehouse, conn)
@@ -308,7 +304,13 @@ def _mirror_runs(warehouse: Warehouse, conn: psycopg.Connection, changed_since: 
         return 0
     rows = [
         (
-            r.RUN_ID, r.JOB, r.LOOP, r.TRIGGER, _ts(r.STARTED_AT), _ts(r.FINISHED_AT), r.STATUS,
+            r.RUN_ID,
+            r.JOB,
+            r.LOOP,
+            r.TRIGGER,
+            _ts(r.STARTED_AT),
+            _ts(r.FINISHED_AT),
+            r.STATUS,
             None if pd.isna(r.ROWS_WRITTEN) else int(r.ROWS_WRITTEN),
             Jsonb(json.loads(r.DETAIL)) if isinstance(r.DETAIL, str) else None,
             r.ERROR if isinstance(r.ERROR, str) else None,

@@ -21,6 +21,8 @@ Dashboard: <https://arbibet.streamlit.app>
   API-Football give each slip leg and fixture a measured base rate.
 - **Explains.** `gpt-4o-mini` writes pre-match briefs, slip verdicts and
   post-match notes from warehouse data only, shown beside the numbers they cite.
+- **Alerts on Telegram.** A bot messages subscribers the moment a surebet or
+  positive-EV price appears, and answers the dashboard's questions as commands.
 - **Observes itself.** Every job and component is recorded and shown on a
   Pipeline health page.
 
@@ -38,13 +40,14 @@ flowchart LR
   subgraph RUN[Runner · Docker]
     listen[Listener<br/>NOTIFY]
     hot[Hot loop<br/>seconds]
-    warm[Warm loop<br/>15 min]
+    warm[Warm loop<br/>15-min clock]
     cold[Cold loop<br/>daily]
   end
   duck[(DuckDB<br/>+ Parquet)]
   ai[OpenAI]
   sb[(Supabase)]
   st[Streamlit]
+  tg[Telegram bot]
 
   bronze -- NOTIFY --> listen --> hot
   bronze --> warm
@@ -57,6 +60,8 @@ flowchart LR
   warm -- publish --> sb
   hot -- publish --> sb
   sb --> st
+  hot -- alerts --> tg
+  sb <-- commands, flags --> tg
 ```
 
 ### Previous (to 17 September 2026)
@@ -110,12 +115,35 @@ writer. Every job, including dbt and Spark, runs inside it.
 
 | Loop | Trigger | Work |
 |---|---|---|
-| Hot | NOTIFY from bronze; 15 s poll fallback | Recompute arbitrage and EV for the changed fixture, store, publish |
-| Warm | Every 15 min | Dimensions, slips, price history, arbitrage tracking, live state, dbt, AI summaries, publish |
+| Hot | NOTIFY from bronze; 15 s poll fallback | Recompute arbitrage and EV for the changed fixture, store, alert, publish |
+| Warm | :00, :15, :30, :45 (an overrun starts the next at once) | Dimensions, slips, price history, arbitrage tracking, live state, dbt, AI summaries, publish |
 | Cold | Daily 06:00 Berlin | Spark flatten and settle, dbt build and tests, slip compaction, backup, pruning |
 
 Writes are MERGEs on natural keys, so any job can be re-run. Failed jobs are
-recorded and retried on the next cycle.
+recorded and retried on the next cycle. Warm jobs yield to the hot loop while
+it recomputes, and the runner reaches the source databases over their Docker
+networks rather than `host.docker.internal` (35× faster for bronze payloads).
+
+## Telegram bot
+
+Two threads inside the runner (`runner/telegram/`). Alerts are handed over
+in-process by the hot loop, so they leave seconds after a price; commands read
+the same Supabase documents as the dashboard and never touch DuckDB.
+
+- **Alerts:** a true surebet (arbitrage above 1, legs within five minutes), or
+  EV at or above the subscriber's threshold (default 0.015), before kick-off
+  and never on a flagged leg. Each shows legs, links and a stake split. Sent
+  once per market or outcome, and again only if the value improves by 0.005
+  (surebet) or 0.02 (EV).
+- **Commands:** `/surebets` (cards, stake split, arbitrage over time, flag a
+  leg, deep dive), `/stake 100 2.10 1.95`, `/ev 0.02`, `/slips`, `/dive
+  <search>`, `/flags`, `/health`, `/settings`, `/start`, `/stop`.
+- **State:** `bot.subscriber` and `bot.alert` in Supabase, with row-level
+  security and no dashboard access. Flags go to `serving.leg_flag`, shared
+  with the dashboard.
+
+Create a bot with @BotFather and set `TELEGRAM_BOT_TOKEN` in `.env`; the bot
+is off without it. `TELEGRAM_ALLOWED_CHATS` optionally restricts who may use it.
 
 ## Operations
 
@@ -127,8 +155,9 @@ docker exec arbibet-runner python -m runner.status
 
 - `ops.job_run` records every execution: duration, rows, errors, and hot-loop
   latency from payload to stored signal.
-- `ops.heartbeat` holds the last beat per component.
-- Both are mirrored to Supabase and shown on the Pipeline health page.
+- `ops.heartbeat` holds the last beat per component, including `telegram`.
+- Both are mirrored to Supabase every minute and shown on the Pipeline health
+  page, with a Telegram section (subscribers, alerts, lag, errors).
 
 The warehouse lives in the `arbibet-warehouse` Docker volume. In Supabase, the
 tables are in the `serving` and `ops` schemas with row-level security; the
@@ -137,7 +166,7 @@ dashboard uses a read-only role (`sql/supabase_dashboard_role.sql`).
 ## Setup
 
 ```bash
-cp .env.example .env        # source DSNs, OPENAI_KEY, SUPABASE_DB_URL
+cp .env.example .env        # source DSNs, OPENAI_KEY, SUPABASE_DB_URL, TELEGRAM_BOT_TOKEN
 py -3.12 -m venv .venv
 .venv/Scripts/python.exe -m pip install -e ".[dev,spark]" duckdb dbt-duckdb
 pytest
@@ -152,7 +181,7 @@ Streamlit secrets: `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER` and
 
 | Path | Contents |
 |---|---|
-| `runner/` | Listener, loops, Supabase publisher, observability, Docker image |
+| `runner/` | Listener, loops, Supabase publisher, Telegram bot, observability, Docker image |
 | `src/arbibet_capstone/` | Bronze reader, crosswalk and parsers (vendored), signals, warehouse layer |
 | `dbt/` | Staging and gold models with tests |
 | `spark/` | Match-history flatten and market settlement |

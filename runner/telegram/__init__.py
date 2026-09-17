@@ -86,8 +86,15 @@ class TelegramService:
         self.started_at = datetime.now(UTC)
 
     # The hot loop's hook.
-    def submit(self, fixture: Any, snapshot: Any, arb: list[dict], ev: list[dict]) -> None:
-        self.alerter.submit(fixture, snapshot, arb, ev)
+    def submit(
+        self,
+        fixture: Any,
+        snapshot: Any,
+        arb: list[dict],
+        ev: list[dict],
+        written_at: datetime | None = None,
+    ) -> None:
+        self.alerter.submit(fixture, snapshot, arb, ev, written_at)
 
     def start(self) -> None:
         self.store.ensure_schema()
