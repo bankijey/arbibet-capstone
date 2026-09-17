@@ -171,6 +171,8 @@ class Observer:
                     "SELECT job, loop, trigger, started_at, finished_at, status, rows_written, "
                     "detail, error FROM ops.job_run ORDER BY started_at DESC LIMIT 60"
                 )
+            beats.columns = [c.lower() for c in beats.columns]
+            runs.columns = [c.lower() for c in runs.columns]
             payload = {
                 "written_at": datetime.now(UTC).isoformat(),
                 "heartbeats": json.loads(beats.to_json(orient="records", date_format="iso")),

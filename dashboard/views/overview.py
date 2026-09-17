@@ -1,12 +1,13 @@
 """Cross-bookmaker market signals: the dashboard's front page.
 
-Warehouse access, credentials and the platform timezone live in
-`dashboard/common.py`; this file is only the page. Booking slips and deep dives
-live on their own page, `views/slips.py`.
+Everything here comes from the 'signals' document the runner publishes to
+Supabase (dashboard/common.py): headline numbers, every surebet leg, where each
+surebet market's arbitrage has stood since, every positive-EV detection with
+its price history, and the precomputed backtest. The hot loop republishes the
+document within about 30 seconds of a new signal.
 
-Every section below the headline numbers is collapsible, so the page can be
-navigated rather than scrolled. Arbitrage and positive EV each have an Upcoming
-and a Past tab: what can still be bet, and what the record says.
+Every section below the headline numbers is collapsible. Arbitrage and positive
+EV each have an Upcoming and a Past tab: what can still be bet, and the record.
 """
 
 from __future__ import annotations
@@ -15,18 +16,21 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from dashboard.arbitrage import stake_split
-from dashboard.backtest import SIZINGS, TIMINGS, choose, compare, simulate
 from dashboard.charts import arbitrage_chart, book_bars, efficiency_bars, odds_chart
 from dashboard.common import (
-    execute,
+    document,
+    flags,
+    frame,
     is_upcoming,
     kickoff,
-    query,
-    register_warmer,
-    warehouse_written,
-    watermark,
+    points,
+    published_at,
+    set_flag,
+    versions,
 )
 from dashboard.series import MAX_LEG_SPREAD_SECONDS, POINTS
+
+doc = document("signals")
 
 st.title("Arbibet — cross-bookmaker market signals")
 st.caption(
@@ -34,87 +38,38 @@ st.caption(
     "taxonomy. Every number below is measured, and the ones that mean less "
     "than they look are labelled."
 )
-
-# --- as of -----------------------------------------------------------------
-# Every source under this page rolls: bronze prunes, the fixture loader moves
-# its window, the producer runs again. A page with no date on it silently
-# claims to be current. So it says when its newest input arrived.
-asof = query(
-    """
-    SELECT
-      -- ::TIMESTAMP_LTZ renders in session time (Europe/Berlin). These are
-      -- TIMESTAMP_TZ columns, which keep the offset their WRITER used and
-      -- ignore the session setting -- see dbt/macros/platform_time.sql.
-      (SELECT max(detected_at)::TIMESTAMP_LTZ  FROM CORE.fact_arbitrage_signal) AS last_signal,
-      (SELECT max(generated_at)::TIMESTAMP_LTZ FROM CORE.gold_slip_summary_ai)  AS last_summary,
-      (SELECT max(fire_time)::TIMESTAMP_LTZ    FROM CORE.fact_odds_tick)        AS last_tick
-    """
-).iloc[0]
+asof = doc["asof"]
 st.caption(
-    f"Newest signal {asof.LAST_SIGNAL:%Y-%m-%d %H:%M} · "
-    f"newest price {asof.LAST_TICK:%Y-%m-%d %H:%M} · "
-    f"newest slip verdict {asof.LAST_SUMMARY:%Y-%m-%d %H:%M} · "
-    f"warehouse last written {warehouse_written()}"
+    f"Newest signal {published_at(asof['lastSignal'])} · "
+    f"newest price {published_at(asof['lastTick'])} · "
+    f"newest slip verdict {published_at(asof['lastSummary'])} · "
+    f"published {published_at(versions().get('signals'))}"
 )
 st.caption(
-    "This page refreshes when the warehouse is written, not on a timer: every "
-    "query is keyed on Snowflake's own last-write time, so a pipeline run "
-    "invalidates it and nothing else does."
+    "Signals are recomputed within seconds of a bookmaker publishing a new price, "
+    "and this page picks them up within a minute."
 )
 
 # --- headline numbers ------------------------------------------------------
-# Only TRUE surebets are counted. The consumer records down to 0.98 so the
-# near misses are available for measuring market efficiency, but a headline
-# that counts them reads as "25 opportunities" when there were four.
-# Surebets are counted only where their legs were priced within five minutes
-# of each other. 48 recorded "surebets" -- up to 1.6788, a 68% guaranteed
-# return -- came from prices up to hours apart: each real, never on sale at the
-# same moment. Every one had legs more than five minutes apart and none inside
-# it (FINDINGS 13g). `is_surebet` carries that rule, and the detector now
-# refuses such sets outright.
-counts = query(
-    """
-    SELECT
-      (SELECT count(*) FROM ANALYTICS.stg_arbitrage_signal a
-        JOIN CORE.dim_fixture f USING (event_id)
-        WHERE a.is_surebet AND a.detected_at < f.kickoff_at)                   AS surebets,
-      (SELECT count(*) FROM ANALYTICS.stg_ev_signal s
-        JOIN CORE.dim_fixture f USING (event_id)
-        WHERE s.detected_at < f.kickoff_at)                                    AS ev_signals,
-      (SELECT count(*) FROM CORE.fact_odds_tick)                               AS ticks,
-      (SELECT count(*) FROM CORE.fact_team_market_result)                      AS settled,
-      (SELECT count(DISTINCT share_code) FROM ANALYTICS.gold_slip_leg_history) AS slips
-    """
-).iloc[0]
-
+counts = doc["counts"]
 a, b, c, d, e = st.columns(5)
 a.metric(
     "True surebets",
-    f"{counts.SUREBETS:,}",
+    f"{counts['surebets']:,}",
     help=(
         "arbitrage > 1, priced before kick-off, every leg within five minutes "
         "of the others. All time — the ones still placeable are under "
         "Upcoming below. Genuine surebets across public books barely exist."
     ),
 )
-b.metric(
-    "Positive-EV",
-    f"{counts.EV_SIGNALS:,}",
-    help="Priced before kick-off. All time; upcoming ones are listed below.",
-)
-c.metric(
-    "Price changes",
-    f"{counts.TICKS:,}",
-    help="Every published price move, replayed from bronze.",
-)
+b.metric("Positive-EV", f"{counts['evSignals']:,}", help="Priced before kick-off. All time.")
+c.metric("Price changes", f"{counts['ticks']:,}", help="Every published price move, replayed.")
 d.metric(
-    "Markets settled",
-    f"{counts.SETTLED:,}",
-    help="Historical results, per team per market.",
+    "Markets settled", f"{counts['settled']:,}", help="Historical results, per team per market."
 )
-e.metric("Slips analysed", f"{counts.SLIPS:,}")
+e.metric("Slips analysed", f"{counts['slips']:,}")
 
-# --- section 1: how an arbitrage is calculated -------------------------------
+# --- how an arbitrage is calculated ----------------------------------------------
 with st.expander("How an arbitrage is calculated", expanded=False):
     st.markdown(
         """
@@ -149,39 +104,25 @@ real and was not:
   published probabilities summing below 0.95).
 """
     )
-
-    example = query(
-        """
-        SELECT fixture, market_name, line, outcome, bookmaker_name, odds, arbitrage,
-               spread_seconds, detected_at
-        FROM ANALYTICS.stg_arbitrage_leg
-        WHERE signal_key = (
-            SELECT signal_key FROM ANALYTICS.stg_arbitrage_signal
-            WHERE is_surebet ORDER BY detected_at DESC LIMIT 1
-        )
-        """
-    )
-    if not example.empty:
-        head = example.iloc[0]
-        line = f" {head.LINE}" if head.LINE else ""
-        split = stake_split(list(example.ODDS))
+    example = doc.get("example")
+    if example:
+        legs = pd.DataFrame(example["legs"])
+        split = stake_split(list(legs.odds))
+        line = f" {example['line']}" if example.get("line") else ""
         st.markdown(
-            f"**Worked example — the newest surebet:** {head.FIXTURE}, "
-            f"{head.MARKET_NAME}{line}, priced {head.DETECTED_AT:%d %b %H:%M}, "
-            f"legs {int(head.SPREAD_SECONDS)}s apart."
+            f"**Worked example — the newest surebet:** {example['fixture']}, "
+            f"{example['market']}{line}, priced {kickoff(example['detectedAt'])}, "
+            f"legs {int(example['spreadSeconds'])}s apart."
         )
-        worked = example.assign(
-            INVERSE=1 / example.ODDS,
-            STAKE=split.fractions if split else None,
-        )
+        worked = legs.assign(inverse=1 / legs.odds, stake=split.fractions if split else None)
         st.dataframe(
-            worked[["OUTCOME", "BOOKMAKER_NAME", "ODDS", "INVERSE", "STAKE"]].rename(
+            worked.rename(
                 columns={
-                    "OUTCOME": "Outcome",
-                    "BOOKMAKER_NAME": "Best book",
-                    "ODDS": "Odds",
-                    "INVERSE": "1 / odds",
-                    "STAKE": "Stake share",
+                    "outcome": "Outcome",
+                    "book": "Best book",
+                    "odds": "Odds",
+                    "inverse": "1 / odds",
+                    "stake": "Stake share",
                 }
             ),
             column_config={
@@ -193,10 +134,10 @@ real and was not:
             hide_index=True,
             use_container_width=True,
         )
+        total = worked.inverse.sum()
         st.caption(
-            f"Σ 1/odds = {worked.INVERSE.sum():.4f}, so arbitrage = "
-            f"1 / {worked.INVERSE.sum():.4f} = **{1 / worked.INVERSE.sum():.4f}**: "
-            f"{(1 / worked.INVERSE.sum() - 1):+.2%} on the total stake, whatever wins."
+            f"Σ 1/odds = {total:.4f}, so arbitrage = 1 / {total:.4f} = **{1 / total:.4f}**: "
+            f"{(1 / total - 1):+.2%} on the total stake, whatever wins."
         )
 
     st.markdown("**How simultaneous is a 'snapshot'?**")
@@ -208,156 +149,142 @@ real and was not:
         "ones sat above it, so the detector now refuses anything wider. The "
         "older rows below predate that rule."
     )
-    freshness = query(
-        """
-        SELECT
-          CASE
-            WHEN leg_spread_seconds <= 60    THEN 'under 1 min'
-            WHEN leg_spread_seconds <= 300   THEN '1-5 min'
-            WHEN leg_spread_seconds <= 3600  THEN '5-60 min'
-            ELSE 'over an hour'
-          END                                                 AS spread,
-          count(*)                                            AS signals,
-          sum(CASE WHEN is_surebet THEN 1 ELSE 0 END)         AS surebets
-        FROM ANALYTICS.stg_arbitrage_signal
-        GROUP BY 1
-        ORDER BY min(leg_spread_seconds)
-        """
-    )
+    freshness = pd.DataFrame(doc["freshness"])
     if not freshness.empty:
-        fresh_left, fresh_right = st.columns([2, 3])
-        fresh_left.dataframe(freshness, hide_index=True, use_container_width=True)
-        fresh_right.bar_chart(freshness.set_index("SPREAD")[["SIGNALS"]], height=240)
+        left, right = st.columns([2, 3])
+        left.dataframe(
+            freshness.rename(
+                columns={"spread": "Legs apart", "signals": "Signals", "surebets": "Surebets"}
+            ),
+            hide_index=True,
+            use_container_width=True,
+        )
+        right.bar_chart(freshness.set_index("spread")[["signals"]], height=240)
 
-# --- data, prepared once per warehouse write ------------------------------------
-# Every query and merge the signal sections need, cached against the warehouse
-# watermark. The first version rebuilt all of it on every rerun -- a slider
-# move, a tab switch, navigating back from another page -- and drew a chart per
-# card, 38 in all: about six seconds a visit with every query already cached.
-# `is_upcoming` is deliberately NOT applied in here: it depends on the clock,
-# and a cached answer would keep a kicked-off match "upcoming" until the next
-# pipeline write.
+# --- data, prepared once per published document -------------------------------------
+
+JOIN = ["EVENT_ID", "MARKET_ID", "OUTCOME_ID", "BOOKMAKER_NAME"]
+_AVAILABILITY = {
+    "latestOdds": "LATEST_ODDS",
+    "offered": "OFFERED",
+    "currentOdds": "CURRENT_ODDS",
+    "bookFiredAt": "BOOK_FIRED_AT",
+}
 
 
-@st.cache_data(show_spinner=False)
-def _prepare(mark: str) -> dict[str, pd.DataFrame]:
-    del mark  # the cache key; the queries below read the same watermark
-    surebet_legs = query(
-        """
-        SELECT l.signal_key, l.event_id, l.market_id, l.outcome_id,
-               l.fixture, l.market_name, l.line, l.outcome,
-               l.bookmaker_name, l.odds, u.url, l.arbitrage, l.spread_seconds,
-               l.detected_at, l.kickoff_at, l.n_legs,
-               l.detected_at < l.kickoff_at AS pre_match
-        FROM ANALYTICS.stg_arbitrage_leg l
-        LEFT JOIN ANALYTICS.stg_event_link u
-          ON u.event_id = l.event_id AND u.bookmaker_name = l.bookmaker_name
-        WHERE l.is_surebet
-        ORDER BY l.arbitrage DESC, l.fixture, l.outcome
-        """
+@st.cache_data(show_spinner=False, max_entries=4)
+def _prepare(version: str) -> dict[str, pd.DataFrame]:
+    del version
+    body = document("signals")
+    arb, ev = body["arbitrage"], body["ev"]
+    legs = frame(
+        arb["legs"],
+        {
+            "signalKey": "SIGNAL_KEY",
+            "eventId": "EVENT_ID",
+            "marketId": "MARKET_ID",
+            "outcomeId": "OUTCOME_ID",
+            "fixture": "FIXTURE",
+            "market": "MARKET_NAME",
+            "line": "LINE",
+            "outcome": "OUTCOME",
+            "book": "BOOKMAKER_NAME",
+            "odds": "ODDS",
+            "url": "URL",
+            "arbitrage": "ARBITRAGE",
+            "spreadSeconds": "SPREAD_SECONDS",
+            "detectedAt": "DETECTED_AT",
+            "kickoffAt": "KICKOFF_AT",
+            "preMatch": "PRE_MATCH",
+            **_AVAILABILITY,
+        },
+        times=("DETECTED_AT", "KICKOFF_AT", "BOOK_FIRED_AT"),
     )
-    # Where every market that ever carried a surebet has stood since, rebuilt by
-    # replaying bronze through the detector (odds/arbitrage_track.py).
-    track = query(
-        """
-        SELECT event_id, market_id, observed_at, arbitrage, leg_spread_seconds
-        FROM ANALYTICS.stg_arbitrage_track
-        ORDER BY observed_at
-        """
+    tracks = []
+    for key, track in arb["tracks"].items():
+        event_id, market_id = key.split("|", 1)
+        part = points(track["points"], "OBSERVED_AT", "ARBITRAGE", "LEG_SPREAD_SECONDS")
+        tracks.append(part.assign(EVENT_ID=event_id, MARKET_ID=market_id, TOTAL=track["total"]))
+    track = (
+        pd.concat(tracks, ignore_index=True)
+        if tracks
+        else pd.DataFrame(
+            columns=[
+                "OBSERVED_AT",
+                "ARBITRAGE",
+                "LEG_SPREAD_SECONDS",
+                "EVENT_ID",
+                "MARKET_ID",
+                "TOTAL",
+            ]
+        )
     )
-    ev_all = query(
-        """
-        SELECT
-          s.event_id, s.market_id, s.outcome_id,
-          COALESCE(f.home_team || ' v ' || f.away_team, s.event_id) AS fixture,
-          COALESCE(m.market_name, 'market ' || s.market_base_id)    AS market,
-          s.specifier AS line, s.outcome_name, s.bookmaker_name,
-          s.odds, u.url, s.implied_p, s.p_source, s.probability_spread_seconds, s.ev,
-          f.kickoff_at::TIMESTAMP_LTZ AS kickoff_at, s.detected_at, s.is_fresh
-        FROM ANALYTICS.stg_ev_signal s
-        LEFT JOIN CORE.dim_fixture f ON f.event_id = s.event_id
-        LEFT JOIN ANALYTICS.stg_event_link u
-          ON u.event_id = s.event_id AND u.bookmaker_name = s.bookmaker_name
-        LEFT JOIN CORE.dim_market m ON m.market_base_id = s.market_base_id
-        WHERE s.detected_at < f.kickoff_at
-        ORDER BY s.ev DESC
-        """
+    standing = pd.DataFrame(
+        [
+            {
+                "EVENT_ID": key.split("|", 1)[0],
+                "MARKET_ID": key.split("|", 1)[1],
+                "ARBITRAGE": t["last"]["arbitrage"],
+                "LEG_SPREAD_SECONDS": t["last"]["spreadSeconds"],
+            }
+            for key, t in arb["tracks"].items()
+        ],
+        columns=["EVENT_ID", "MARKET_ID", "ARBITRAGE", "LEG_SPREAD_SECONDS"],
     )
-    signal_ticks = query(
-        """
-        SELECT t.event_id, t.market_id, t.outcome_id, t.bookmaker_name, t.odds, t.fire_time
-        FROM ANALYTICS.stg_odds_tick t
-        JOIN (
-            SELECT DISTINCT event_id, market_id FROM ANALYTICS.stg_arbitrage_leg WHERE is_surebet
-            UNION
-            SELECT DISTINCT event_id, market_id FROM ANALYTICS.stg_ev_signal
-        ) m ON m.event_id = t.event_id AND m.market_id = t.market_id
-        """
+    ev_all = frame(
+        ev["rows"],
+        {
+            "eventId": "EVENT_ID",
+            "marketId": "MARKET_ID",
+            "outcomeId": "OUTCOME_ID",
+            "fixture": "FIXTURE",
+            "market": "MARKET",
+            "line": "LINE",
+            "outcome": "OUTCOME_NAME",
+            "book": "BOOKMAKER_NAME",
+            "odds": "ODDS",
+            "url": "URL",
+            "impliedP": "IMPLIED_P",
+            "comparable": "P_SOURCE",
+            "timeLapseSeconds": "PROBABILITY_SPREAD_SECONDS",
+            "ev": "EV",
+            "kickoffAt": "KICKOFF_AT",
+            "detectedAt": "DETECTED_AT",
+            "isFresh": "IS_FRESH",
+            "verdict": "VERDICT",
+            **_AVAILABILITY,
+        },
+        times=("DETECTED_AT", "KICKOFF_AT", "BOOK_FIRED_AT"),
     )
-    # Is each leg still in the book's LATEST payload (odds/live_state.py).
-    availability = query(
-        """
-        SELECT a.event_id, a.market_id, a.outcome_id, b.bookmaker_name,
-               a.offered, a.current_odds, a.book_fired_at::TIMESTAMP_LTZ AS book_fired_at
-        FROM CORE.fact_leg_availability a
-        JOIN CORE.dim_bookmaker b USING (bookmaker_id)
-        """
+    ticks = []
+    for key, books in ev["prices"].items():
+        event_id, market_id, outcome_id = key.split("|", 2)
+        for book, series in books.items():
+            part = points(series, "FIRE_TIME", "ODDS")
+            ticks.append(
+                part.assign(
+                    EVENT_ID=event_id,
+                    MARKET_ID=market_id,
+                    OUTCOME_ID=outcome_id,
+                    BOOKMAKER_NAME=book,
+                )
+            )
+    signal_ticks = (
+        pd.concat(ticks, ignore_index=True)
+        if ticks
+        else pd.DataFrame(columns=["FIRE_TIME", "ODDS", *JOIN])
     )
-    flags = query(
-        """
-        SELECT event_id, market_id, bookmaker_name, flagged_at::TIMESTAMP_LTZ AS flagged_at
-        FROM CORE.dashboard_leg_flag
-        WHERE active
-        """
-    )
-    for frame in (surebet_legs, ev_all, signal_ticks, availability):
-        frame["OUTCOME_ID"] = frame.OUTCOME_ID.astype(str)
-
-    # Latest price per (market, outcome, book), as of kick-off for a played match.
-    kickoffs = pd.concat(
-        [surebet_legs[["EVENT_ID", "KICKOFF_AT"]], ev_all[["EVENT_ID", "KICKOFF_AT"]]]
-    ).drop_duplicates("EVENT_ID")
-    pre = signal_ticks.merge(kickoffs, on="EVENT_ID", how="left")
-    pre = pre[
-        pre.KICKOFF_AT.isna()
-        | (pd.to_datetime(pre.FIRE_TIME, utc=True) <= pd.to_datetime(pre.KICKOFF_AT, utc=True))
-    ]
-    latest = (
-        pre.sort_values("FIRE_TIME").groupby(JOIN, as_index=False).agg(LATEST_ODDS=("ODDS", "last"))
-    )
-    surebet_legs = surebet_legs.merge(latest, on=JOIN, how="left").merge(
-        availability, on=JOIN, how="left"
-    )
-    ev_all = ev_all.merge(latest, on=JOIN, how="left").merge(availability, on=JOIN, how="left")
-    for frame in (surebet_legs, ev_all):
-        frame["OFFERED_NOW"] = frame.apply(_offered_text, axis=1) if not frame.empty else []
+    for data in (legs, ev_all):
+        data["OFFERED_NOW"] = data.apply(_offered_text, axis=1) if not data.empty else []
     ev_all["FRESHNESS"] = ev_all.IS_FRESH.map(
         lambda v: "not recorded" if pd.isna(v) else ("fresh" if v else "stale")
     )
-
-    # Flags hide a leg everywhere: any detection using that book on that market,
-    # and that book's EV rows on it.
-    keys = set(zip(flags.EVENT_ID, flags.MARKET_ID, flags.BOOKMAKER_NAME, strict=True))
-    flagged = [
-        k in keys
-        for k in zip(
-            surebet_legs.EVENT_ID, surebet_legs.MARKET_ID, surebet_legs.BOOKMAKER_NAME, strict=True
-        )
-    ]
-    hidden = set(surebet_legs.loc[flagged, "SIGNAL_KEY"])
-    surebet_legs = surebet_legs[~surebet_legs.SIGNAL_KEY.isin(hidden)]
-    ev_all = ev_all[
-        [
-            k not in keys
-            for k in zip(ev_all.EVENT_ID, ev_all.MARKET_ID, ev_all.BOOKMAKER_NAME, strict=True)
-        ]
-    ]
     return {
-        "surebet_legs": surebet_legs,
+        "surebet_legs": legs,
         "track": track,
+        "standing": standing,
         "ev_all": ev_all,
         "signal_ticks": signal_ticks,
-        "flags": flags,
     }
 
 
@@ -370,20 +297,27 @@ def _offered_text(row: pd.Series) -> str:
     return f"withdrawn{when}"
 
 
-JOIN = ["EVENT_ID", "MARKET_ID", "OUTCOME_ID", "BOOKMAKER_NAME"]
-
-
-register_warmer("overview-signals", _prepare)
-
-
 def _data() -> dict[str, pd.DataFrame]:
-    """The prepared frames, with the clock-dependent split applied fresh."""
-    frames = dict(_prepare(watermark()))
-    for name in ("surebet_legs", "ev_all"):
-        frame = frames[name].copy()
-        frame["UPCOMING"] = is_upcoming(frame.KICKOFF_AT)
-        frames[name] = frame
-    return frames
+    """The prepared frames, with viewer flags and the clock applied fresh."""
+    frames = dict(_prepare(versions().get("signals", "")))
+    active = flags()
+    keys = set(zip(active.EVENT_ID, active.MARKET_ID, active.BOOKMAKER_NAME, strict=True))
+    legs = frames["surebet_legs"]
+    flagged = [
+        k in keys for k in zip(legs.EVENT_ID, legs.MARKET_ID, legs.BOOKMAKER_NAME, strict=True)
+    ]
+    hidden = set(legs.loc[flagged, "SIGNAL_KEY"])
+    legs = legs[~legs.SIGNAL_KEY.isin(hidden)].copy()
+    ev_all = frames["ev_all"]
+    ev_all = ev_all[
+        [
+            k not in keys
+            for k in zip(ev_all.EVENT_ID, ev_all.MARKET_ID, ev_all.BOOKMAKER_NAME, strict=True)
+        ]
+    ].copy()
+    legs["UPCOMING"] = is_upcoming(legs.KICKOFF_AT)
+    ev_all["UPCOMING"] = is_upcoming(ev_all.KICKOFF_AT)
+    return {**frames, "surebet_legs": legs, "ev_all": ev_all, "flags": active}
 
 
 BET_LINK = st.column_config.LinkColumn(
@@ -417,21 +351,6 @@ EV_COLUMNS = {
     "DETECTED_AT": "Priced at",
     "VERDICT": "Result",
 }
-
-
-def _flag(event_id: str, market_id: str, book: str) -> None:
-    execute(
-        """
-        MERGE INTO CORE.dashboard_leg_flag t
-        USING (SELECT %s AS event_id, %s AS market_id, %s AS bookmaker_name) s
-          ON t.event_id = s.event_id AND t.market_id = s.market_id
-         AND t.bookmaker_name = s.bookmaker_name
-        WHEN MATCHED THEN UPDATE SET active = TRUE, flagged_at = current_timestamp()
-        WHEN NOT MATCHED THEN INSERT (event_id, market_id, bookmaker_name, active)
-          VALUES (s.event_id, s.market_id, s.bookmaker_name, TRUE)
-        """,
-        (event_id, market_id, book),
-    )
 
 
 def _sizing(rows: pd.DataFrame, key: str) -> None:
@@ -482,7 +401,7 @@ def _sizing(rows: pd.DataFrame, key: str) -> None:
     ticked = edited[edited.FLAG]
     if not ticked.empty:
         for r in ticked.itertuples():
-            _flag(r.EVENT_ID, r.MARKET_ID, r.BOOKMAKER_NAME)
+            set_flag(r.EVENT_ID, r.MARKET_ID, r.BOOKMAKER_NAME, True)
         st.rerun()
 
     split = stake_split(list(edited.YOUR_ODDS))
@@ -517,24 +436,41 @@ def _sizing(rows: pd.DataFrame, key: str) -> None:
     )
 
 
-def _standing(track: pd.DataFrame, event_id: str, market_id: str) -> pd.Series | None:
-    history = track[(track.EVENT_ID == event_id) & (track.MARKET_ID == market_id)]
-    return history.iloc[-1] if not history.empty else None
+def _standing(standing: pd.DataFrame, event_id: str, market_id: str) -> pd.Series | None:
+    row = standing[(standing.EVENT_ID == event_id) & (standing.MARKET_ID == market_id)]
+    return row.iloc[0] if not row.empty else None
 
 
 def _market_label(row: pd.Series) -> str:
-    line = f" {row.LINE}" if row.LINE else ""
+    line = f" {row.LINE}" if isinstance(row.LINE, str) and row.LINE else ""
     return f"{row.FIXTURE} — {row.MARKET_NAME}{line}"
 
 
-def _upcoming_cards(legs: pd.DataFrame, track: pd.DataFrame) -> None:
+def _track_chart(
+    track: pd.DataFrame, detections: pd.DataFrame, kickoff_at: object, now_label: str, key: str
+) -> None:
+    if track.empty:
+        st.caption("No tracked history for this market yet. It is rebuilt every warm cycle.")
+        return
+    st.plotly_chart(
+        arbitrage_chart(track, detections, kickoff_at, now_label),
+        use_container_width=True,
+        key=key,
+    )
+    st.caption(
+        f"{int(track.TOTAL.iloc[0])} recorded changes, drawn as the ~{POINTS} largest. "
+        "Red diamonds: surebet detections. Grey points: legs more than five minutes apart."
+    )
+
+
+def _upcoming_cards(legs: pd.DataFrame, track: pd.DataFrame, standing_all: pd.DataFrame) -> None:
     """One card per upcoming MARKET that has carried a surebet, with sizing."""
     for (event_id, market_id), rows in legs.groupby(["EVENT_ID", "MARKET_ID"], sort=False):
         head = rows.loc[rows.ARBITRAGE.idxmax()]
         newest_key = rows.loc[rows.DETECTED_AT.idxmax(), "SIGNAL_KEY"]
         newest_rows = rows[rows.SIGNAL_KEY == newest_key]
         detections = rows.drop_duplicates("SIGNAL_KEY")
-        standing = _standing(track, event_id, market_id)
+        standing = _standing(standing_all, event_id, market_id)
 
         with st.container(border=True):
             st.markdown(f"**{_market_label(head)}**")
@@ -597,26 +533,14 @@ def _upcoming_cards(legs: pd.DataFrame, track: pd.DataFrame) -> None:
 
             with st.expander("Arbitrage over time", expanded=False):
                 history = track[(track.EVENT_ID == event_id) & (track.MARKET_ID == market_id)]
-                if history.empty:
-                    st.caption(
-                        "No tracked history for this market yet. It is rebuilt every "
-                        "30 minutes; bronze prunes after about seven weeks."
-                    )
-                else:
-                    st.plotly_chart(
-                        arbitrage_chart(history, detections, head.KICKOFF_AT, "now"),
-                        use_container_width=True,
-                        key=f"arb-up-{event_id}-{market_id}",
-                    )
-                    st.caption(
-                        f"{len(history)} recorded changes, drawn as the ~{POINTS} largest. "
-                        "Red diamonds: surebet detections. Grey points: legs more than five "
-                        "minutes apart."
-                    )
+                _track_chart(
+                    history, detections, head.KICKOFF_AT, "now", f"arb-up-{event_id}-{market_id}"
+                )
 
 
-def _arbitrage_chart_picker(legs: pd.DataFrame, track: pd.DataFrame, played: bool, key: str):
-    """ONE chart for the tab, for the market picked -- not one per card."""
+def _arbitrage_chart_picker(
+    legs: pd.DataFrame, track: pd.DataFrame, played: bool, key: str
+) -> None:
     markets = (
         legs.groupby(["EVENT_ID", "MARKET_ID"], sort=False)
         .agg(
@@ -633,27 +557,17 @@ def _arbitrage_chart_picker(legs: pd.DataFrame, track: pd.DataFrame, played: boo
     labels = [f"{_market_label(m)} (best {m.BEST:.4f})" for _, m in markets.iterrows()]
     picked = markets.iloc[labels.index(st.selectbox("Arbitrage over time for", labels, key=key))]
     history = track[(track.EVENT_ID == picked.EVENT_ID) & (track.MARKET_ID == picked.MARKET_ID)]
-    if history.empty:
-        st.caption(
-            "No tracked history for this market yet. It is rebuilt every 30 "
-            "minutes; bronze prunes after about seven weeks."
-        )
-        return
     detections = legs[
         (legs.EVENT_ID == picked.EVENT_ID) & (legs.MARKET_ID == picked.MARKET_ID)
     ].drop_duplicates("SIGNAL_KEY")
-    st.plotly_chart(
-        arbitrage_chart(history, detections, picked.KICKOFF_AT, "at kick-off" if played else "now"),
-        use_container_width=True,
-        key=f"{key}-chart",
-    )
-    st.caption(
-        f"{len(history)} recorded changes, drawn as the ~{POINTS} largest. Red "
-        "diamonds: surebet detections. Grey points: legs more than five minutes apart."
+    _track_chart(
+        history, detections, picked.KICKOFF_AT, "at kick-off" if played else "now", f"{key}-chart"
     )
 
 
-def _ev_chart(rows: pd.DataFrame, ticks: pd.DataFrame, ev_min: float, played: bool, key: str):
+def _ev_chart(
+    rows: pd.DataFrame, ticks: pd.DataFrame, ev_min: float, played: bool, key: str
+) -> None:
     groups = (
         rows.groupby(JOIN, as_index=False)
         .agg(
@@ -669,7 +583,7 @@ def _ev_chart(rows: pd.DataFrame, ticks: pd.DataFrame, ev_min: float, played: bo
     if groups.empty:
         return
     labels = [
-        f"{g.FIXTURE} — {g.MARKET}{' ' + g.LINE if g.LINE else ''} · "
+        f"{g.FIXTURE} — {g.MARKET}{' ' + g.LINE if isinstance(g.LINE, str) and g.LINE else ''} · "
         f"{g.OUTCOME_NAME} @ {g.BOOKMAKER_NAME} (best EV {g.BEST:.3f})"
         for g in groups.itertuples()
     ]
@@ -706,11 +620,11 @@ def _ev_chart(rows: pd.DataFrame, ticks: pd.DataFrame, ev_min: float, played: bo
     )
 
 
-def _hidden_flags(flags: pd.DataFrame) -> None:
-    if flags.empty:
+def _hidden_flags(active: pd.DataFrame) -> None:
+    if active.empty:
         return
-    with st.popover(f"Hidden by flags ({len(flags)})"):
-        for r in flags.itertuples():
+    with st.popover(f"Hidden by flags ({len(active)})"):
+        for r in active.itertuples():
             left, right = st.columns([4, 1])
             left.caption(
                 f"{r.BOOKMAKER_NAME} · market {r.MARKET_ID} · event "
@@ -719,24 +633,17 @@ def _hidden_flags(flags: pd.DataFrame) -> None:
             if right.button(
                 "Restore", key=f"restore-{r.EVENT_ID}-{r.MARKET_ID}-{r.BOOKMAKER_NAME}"
             ):
-                execute(
-                    "UPDATE CORE.dashboard_leg_flag SET active = FALSE "
-                    "WHERE event_id = %s AND market_id = %s AND bookmaker_name = %s",
-                    (r.EVENT_ID, r.MARKET_ID, r.BOOKMAKER_NAME),
-                )
+                set_flag(r.EVENT_ID, r.MARKET_ID, r.BOOKMAKER_NAME, False)
                 st.rerun()
 
 
-# --- section 2: arbitrage, upcoming and past --------------------------------------
-# Fragments: a tab, a picker or an edited price reruns only its own section,
-# never the whole page. Navigation between pages still reruns the page -- that
-# is how Streamlit works -- but everything it reads is cached.
+# --- arbitrage, upcoming and past --------------------------------------------------
 
 
 @st.fragment
 def arbitrage_section() -> None:
     data = _data()
-    legs, track = data["surebet_legs"], data["track"]
+    legs, track, standing = data["surebet_legs"], data["track"], data["standing"]
     upcoming = legs[legs.UPCOMING & legs.PRE_MATCH.eq(True)]
     past = legs[~legs.UPCOMING]
     _hidden_flags(data["flags"])
@@ -761,22 +668,16 @@ def arbitrage_section() -> None:
                 "close within minutes."
             )
         else:
-            _upcoming_cards(upcoming, track)
+            _upcoming_cards(upcoming, track, standing)
 
     with past_tab:
         _efficiency()
         st.markdown("**Past surebets**")
-        stale = query(
-            """
-            SELECT count(*) AS n, max(arbitrage) AS worst
-            FROM ANALYTICS.stg_arbitrage_signal
-            WHERE arbitrage > 1 AND NOT is_fresh
-            """
-        ).iloc[0]
-        if int(stale.N):
+        stale = doc["arbitrage"]["stale"]
+        if stale["n"]:
             st.caption(
-                f"{int(stale.N)} further signals above 1.0 are not shown anywhere, the "
-                f"largest {stale.WORST:.4f}: legs priced more than five minutes apart, "
+                f"{int(stale['n'])} further signals above 1.0 are not shown anywhere, the "
+                f"largest {stale['worst']:.4f}: legs priced more than five minutes apart, "
                 "never on sale together. Kept as the evidence for the freshness rule."
             )
         if past.empty:
@@ -796,11 +697,13 @@ def arbitrage_section() -> None:
             .reset_index()
         )
         summary["AT_KICKOFF"] = [
-            None if (s := _standing(track, e, m)) is None or pd.isna(s.ARBITRAGE) else s.ARBITRAGE
+            None
+            if (s := _standing(standing, e, m)) is None or pd.isna(s.ARBITRAGE)
+            else s.ARBITRAGE
             for e, m in zip(summary.EVENT_ID, summary.MARKET_ID, strict=True)
         ]
         summary["MARKET"] = summary.MARKET_NAME + summary.LINE.map(
-            lambda v: f" {v}" if pd.notna(v) and v else ""
+            lambda v: f" {v}" if isinstance(v, str) and v else ""
         )
         st.dataframe(
             summary.sort_values("KICKOFF_AT", ascending=False)[
@@ -838,21 +741,9 @@ def _efficiency() -> None:
         "purpose. Not per-bookmaker vig."
     )
     by_line = st.toggle("Split each market by line", value=False, key="efficiency-by-line")
-    # Each grain is its own query: Snowflake does the grouping, and each result
-    # is cached on its own, so flipping the switch back is instant. One bar per
-    # market (the default) or per market and line -- never per WEEK, which is
-    # what made the first chart's bars stack.
-    grain = "s.specifier" if by_line else "NULL"
-    efficiency = query(
-        f"""
-        SELECT COALESCE(m.market_name, 'market ' || s.market_base_id)
-                 || COALESCE(' ' || {grain}, '')                AS label,
-               count(*)                                          AS signals,
-               avg(s.overround)                                  AS mean_overround
-        FROM ANALYTICS.stg_arbitrage_signal s
-        LEFT JOIN CORE.dim_market m ON m.market_base_id = s.market_base_id
-        GROUP BY 1
-        """
+    grain = "byLine" if by_line else "byMarket"
+    efficiency = pd.DataFrame(doc["arbitrage"]["efficiency"][grain]).rename(
+        columns={"label": "LABEL", "signals": "SIGNALS", "meanOverround": "MEAN_OVERROUND"}
     )
     if efficiency.empty:
         st.info("No signals yet.")
@@ -860,25 +751,7 @@ def _efficiency() -> None:
         st.plotly_chart(efficiency_bars(efficiency), use_container_width=True)
 
 
-# --- section 3: positive EV, upcoming and past ------------------------------------
-
-
-@st.cache_data(show_spinner=False)
-def _backtest(mark: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    del mark
-    settled = query(
-        """
-        SELECT signal_key, event_id, market_id, outcome_id, fixture, tournament,
-               market_name, line, outcome_name, bookmaker_name, odds, implied_p, ev,
-               is_fresh, detected_at, kickoff_at, verdict
-        FROM ANALYTICS.gold_ev_settled
-        """
-    )
-    settled["OUTCOME_ID"] = settled.OUTCOME_ID.astype(str)
-    return settled, compare(settled)
-
-
-register_warmer("overview-backtest", _backtest)
+# --- positive EV, upcoming and past ----------------------------------------------
 
 SIZING_LABELS = {
     "flat": "Flat 1% of start",
@@ -887,29 +760,27 @@ SIZING_LABELS = {
     "half_kelly": "Half Kelly",
     "quarter_kelly": "Quarter Kelly",
 }
+TIMING_LABELS = {"first": "first seen", "best": "best EV", "last": "last before kick-off"}
 
 
 def _backtest_panel() -> None:
-    settled, table = _backtest(watermark())
-    n_settled = settled.dropna(subset=["VERDICT"]).drop_duplicates(
-        ["EVENT_ID", "MARKET_ID", "OUTCOME_ID"]
-    )
+    backtest = doc["ev"]["backtest"]
     st.markdown("**Backtest: what if every past positive EV had been bet?**")
+    if not backtest["opportunities"]:
+        st.info("No positive-EV opportunity has settled yet.")
+        return
     st.caption(
-        f"{len(n_settled)} settled opportunities (fixture, market, outcome) from "
-        f"{settled.KICKOFF_AT.min():%d %b} to {settled.KICKOFF_AT.max():%d %b}. Starting "
+        f"{backtest['opportunities']} settled opportunities (fixture, market, outcome) from "
+        f"{kickoff(backtest['from'])[:6]} to {kickoff(backtest['to'])[:6]}. Starting "
         "bankroll 100. Stakes come from cash not tied up in unsettled bets; each bet "
         "settles two hours after kick-off. Kelly stakes `EV / (odds − 1)` of the "
         "bankroll, which is growth-optimal only if the probability is right — here it "
         "is a bookmaker's, margin included."
     )
-    if n_settled.empty:
-        st.info("No positive-EV opportunity has settled yet.")
-        return
     timing = (
         st.segmented_control(
             "Take the price",
-            options=list(TIMINGS),
+            options=list(TIMING_LABELS),
             format_func={
                 "first": "when first seen",
                 "best": "at its best EV",
@@ -920,12 +791,11 @@ def _backtest_panel() -> None:
         )
         or "first"
     )
-    chosen = choose(settled, timing)
-    curves = []
-    for sizing in SIZINGS:
-        result = simulate(chosen, sizing)
-        if not result.curve.empty:
-            curves.append(result.curve.assign(STRATEGY=SIZING_LABELS[sizing]))
+    curves = [
+        points(series, "AT", "BANKROLL").assign(STRATEGY=SIZING_LABELS[sizing])
+        for sizing, series in backtest["curves"].get(timing, {}).items()
+        if series
+    ]
     if curves:
         figure = px.line(
             pd.concat(curves),
@@ -943,12 +813,10 @@ def _backtest_panel() -> None:
         )
         st.plotly_chart(figure, use_container_width=True, key="backtest-chart")
 
+    table = pd.DataFrame(backtest["table"])
     ranked = table.assign(
         STRATEGY=table.sizing.map(SIZING_LABELS),
-        TIMING=table.timing.map(
-            {"first": "first seen", "best": "best EV", "last": "last before kick-off"}
-        ),
-        # Growth per unit of pain: final gain over the worst fall from a peak.
+        TIMING=table.timing.map(TIMING_LABELS),
         SCORE=(table.final - 100) / table.max_drawdown.clip(lower=0.01) / 100,
     ).sort_values("SCORE", ascending=False)
     best = ranked.iloc[0]
@@ -958,7 +826,7 @@ def _backtest_panel() -> None:
         f"bankroll 100 → {best.final:.0f}, worst drawdown {best.max_drawdown:.0%}. "
         f"Highest final bankroll: {richest.STRATEGY} ({richest.TIMING}), 100 → "
         f"{richest.final:.0f} with a {richest.max_drawdown:.0%} drawdown. "
-        f"On {len(n_settled)} opportunities this is a reading, not a law."
+        f"On {backtest['opportunities']} opportunities this is a reading, not a law."
     )
     st.dataframe(
         ranked[
@@ -1004,7 +872,7 @@ def ev_section() -> None:
             f"Fixtures that have NOT kicked off: every outcome whose price beat its "
             f"probability by at least {ev_min:.3f}. The probability is the most recent one "
             "sportybet or msport published, within five minutes of the price. **On the "
-            "book now** is its latest payload, checked every 30 minutes."
+            "book now** is its latest payload, checked every warm cycle."
         )
         if upcoming.empty:
             st.info(f"No EV of {ev_min:.3f} or more on a fixture still to be played.")
@@ -1026,7 +894,7 @@ def ev_section() -> None:
             ticked = edited[edited.FLAG]
             if not ticked.empty:
                 for r in ticked.itertuples():
-                    _flag(r.EVENT_ID, r.MARKET_ID, r.BOOKMAKER_NAME)
+                    set_flag(r.EVENT_ID, r.MARKET_ID, r.BOOKMAKER_NAME, True)
                 st.rerun()
             _ev_chart(upcoming, ticks, ev_min, played=False, key="ev-up")
 
@@ -1036,12 +904,8 @@ def ev_section() -> None:
             "Only sportybet and msport publish a probability alongside their prices, so "
             "every other book's EV is measured against a borrowed one."
         )
-        by_book = query(
-            """
-            SELECT bookmaker_name, count(*) AS signals, avg(ev) AS mean_ev
-            FROM ANALYTICS.stg_ev_signal
-            GROUP BY 1 ORDER BY 2 DESC
-            """
+        by_book = pd.DataFrame(doc["ev"]["byBook"]).rename(
+            columns={"book": "BOOKMAKER_NAME", "signals": "SIGNALS", "meanEv": "MEAN_EV"}
         )
         if not by_book.empty:
             st.plotly_chart(
@@ -1054,24 +918,9 @@ def ev_section() -> None:
         if past.empty:
             st.caption("None.")
         else:
-            settled, _ = _backtest(watermark())
-            with_result = past.merge(
-                settled[
-                    [
-                        "EVENT_ID",
-                        "MARKET_ID",
-                        "OUTCOME_ID",
-                        "BOOKMAKER_NAME",
-                        "DETECTED_AT",
-                        "VERDICT",
-                    ]
-                ],
-                on=["EVENT_ID", "MARKET_ID", "OUTCOME_ID", "BOOKMAKER_NAME", "DETECTED_AT"],
-                how="left",
-            )
-            columns = [c for c in EV_COLUMNS if c in with_result.columns]
+            columns = [c for c in EV_COLUMNS if c in past.columns]
             st.dataframe(
-                with_result[columns].rename(columns=EV_COLUMNS),
+                past[columns].rename(columns=EV_COLUMNS),
                 column_config={"Bet": BET_LINK},
                 hide_index=True,
                 use_container_width=True,

@@ -9,9 +9,9 @@ page's sidebar label from its FILENAME, which gave a sidebar reading "app" and
 links stay `/fixture?event_id=...` -- they are shareable, so the path is part
 of the contract and must not drift with a rename.
 
-Nothing here imports `arbibet_capstone`. The dashboard is a consumer of the
-warehouse, not part of the pipeline, and Streamlit Community Cloud installs
-from `requirements.txt` rather than the package.
+Nothing here imports `arbibet_capstone`. The dashboard reads the serving
+database the pipeline publishes to (dashboard/common.py), not the warehouse,
+and Streamlit Community Cloud installs from `requirements.txt`.
 """
 
 from __future__ import annotations
@@ -48,6 +48,11 @@ navigation = st.navigation(
             "views/slips.py",
             title="Betting slips",
             url_path="slips",
+        ),
+        st.Page(
+            "views/health.py",
+            title="Pipeline health",
+            url_path="health",
         ),
         # Reached from a deep-dive card on the slips page, never from the
         # sidebar: a page that needs a fixture chosen first has no business in

@@ -9,17 +9,16 @@ Two sections, each collapsible:
   played ranked separately, with every leg's live match status and, once
   settled, how it resolved.
 
-Speed. Slip selection reads one row per slip (`gold_slip_overview`) and legs are
-fetched only for the slips on screen; the first version pulled all 23,000 legs
-and aggregated them in pandas on every visit. Deep dives rank from
-`gold_fixture_popularity` rather than flattening raw slip payloads per visit.
+Data: the 'slips' document the runner publishes to Supabase -- every slipped
+fixture ranked by distinct slips, the most-copied slips with their verdicts,
+and those slips' legs with live status and results.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
-from dashboard.common import is_upcoming, kickoff, query
+from dashboard.common import document, frame, is_upcoming, kickoff
 
 SLIP_COUNT = 10
 UPCOMING_DIVES = 10
@@ -58,15 +57,17 @@ def deep_dives() -> None:
         "time are old ones, and would otherwise crowd out every match still to be "
         "played."
     )
-    popular = query(
-        """
-        SELECT p.event_id, f.home_team || ' v ' || f.away_team AS fixture,
-               f.tournament, f.kickoff_at::TIMESTAMP_LTZ AS kickoff_at,
-               p.slips, p.follows
-        FROM ANALYTICS.gold_fixture_popularity p
-        JOIN CORE.dim_fixture f ON f.event_id = p.event_id
-        ORDER BY p.slips DESC
-        """
+    popular = frame(
+        document("slips")["popular"],
+        {
+            "eventId": "EVENT_ID",
+            "fixture": "FIXTURE",
+            "tournament": "TOURNAMENT",
+            "kickoffAt": "KICKOFF_AT",
+            "slips": "SLIPS",
+            "follows": "FOLLOWS",
+        },
+        times=("KICKOFF_AT",),
     )
     popular["UPCOMING"] = is_upcoming(popular.KICKOFF_AT)
     upcoming = popular[popular.UPCOMING].head(UPCOMING_DIVES)
@@ -92,10 +93,9 @@ def deep_dives() -> None:
 def _past_table(past: pd.DataFrame) -> None:
     """Every played fixture punters built slips on, filterable, most-slipped first.
 
-    Filters run over ALL past fixtures, not just the top twenty, and the table
-    then shows the top of what matches. Selecting a row opens its deep dive.
-    Price history and the pre-match brief are prepared for the twenty
-    most-slipped; a fixture further down still opens, with whatever exists.
+    Filters run over ALL past fixtures, and the table then shows the top of
+    what matches. Selecting a row opens its deep dive; deep dives are kept for
+    45 days after kick-off.
     """
     st.markdown("**Past** · matches already played, most-slipped first")
     if past.empty:
@@ -260,53 +260,53 @@ def popular_slips() -> None:
     # One row per slip: the newest verdict (QUALIFY -- a slip whose legs changed
     # gains a row, and the page must not show a stale card above its
     # replacement) beside the slip's leg count, kick-off span and results.
-    slips = query(
-        """
-        SELECT s.share_code, s.followed_times, s.legs, s.legs_with_history, s.summary,
-               o.legs AS leg_count, o.first_kickoff::TIMESTAMP_LTZ AS first_kickoff,
-               o.last_kickoff::TIMESTAMP_LTZ AS last_kickoff, o.won, o.lost, o.combined_odds
-        FROM CORE.gold_slip_summary_ai s
-        LEFT JOIN ANALYTICS.gold_slip_overview o ON o.share_code = s.share_code
-        QUALIFY row_number() OVER (PARTITION BY s.share_code ORDER BY s.generated_at DESC) = 1
-        ORDER BY s.followed_times DESC NULLS LAST
-        """
+    body = document("slips")
+    slips = frame(
+        body["cards"],
+        {
+            "shareCode": "SHARE_CODE",
+            "followedTimes": "FOLLOWED_TIMES",
+            "legs": "LEGS",
+            "legsWithHistory": "LEGS_WITH_HISTORY",
+            "summary": "SUMMARY",
+            "legCount": "LEG_COUNT",
+            "firstKickoff": "FIRST_KICKOFF",
+            "lastKickoff": "LAST_KICKOFF",
+            "won": "WON",
+            "lost": "LOST",
+            "combinedOdds": "COMBINED_ODDS",
+        },
+        times=("FIRST_KICKOFF", "LAST_KICKOFF"),
     )
-    waiting = (
-        query(
-            """
-        SELECT count(*) AS n
-        FROM ANALYTICS.gold_slip_overview o
-        WHERE o.last_kickoff > current_timestamp()
-          AND o.share_code NOT IN (SELECT share_code FROM CORE.gold_slip_summary_ai)
-        """
-        )
-        .iloc[0]
-        .N
-    )
+    waiting = body["waiting"]
     # Upcoming = its LAST leg has not kicked off yet, judged now (see is_upcoming).
     up_mask = is_upcoming(slips.LAST_KICKOFF)
     shown_up = slips[up_mask].head(SLIP_COUNT)
     shown_played = slips[~up_mask].head(SLIP_COUNT)
     codes = sorted(set(shown_up.SHARE_CODE) | set(shown_played.SHARE_CODE))
-    legs = (
-        query(
-            f"""
-            SELECT g.share_code, g.event_id, g.home_team, g.away_team, g.market_name,
-                   g.outcome_name, g.odds, g.kickoff_at, g.history_wins, g.history_matches,
-                   g.resolution, u.url, e.match_status, e.score, e.played_time
-            FROM ANALYTICS.gold_slip_leg_history g
-            -- msport booking slips, so each leg links to its match on msport.
-            LEFT JOIN ANALYTICS.stg_event_link u
-              ON u.event_id = g.event_id AND u.bookmaker_name = 'msport'
-            -- Live status from the books' latest payload (odds/live_state.py).
-            LEFT JOIN CORE.fact_event_state e ON e.event_id = g.event_id
-            WHERE g.share_code IN ({", ".join(f"'{c}'" for c in codes)})
-            ORDER BY g.share_code, g.leg_index
-            """
+    leg_columns = {
+        "eventId": "EVENT_ID",
+        "home": "HOME_TEAM",
+        "away": "AWAY_TEAM",
+        "market": "MARKET_NAME",
+        "pick": "OUTCOME_NAME",
+        "odds": "ODDS",
+        "kickoffAt": "KICKOFF_AT",
+        "historyWins": "HISTORY_WINS",
+        "historyMatches": "HISTORY_MATCHES",
+        "resolution": "RESOLUTION",
+        "url": "URL",
+        "matchStatus": "MATCH_STATUS",
+        "score": "SCORE",
+        "playedTime": "PLAYED_TIME",
+    }
+    parts = [
+        frame(body["legs"].get(code, []), leg_columns, times=("KICKOFF_AT",)).assign(
+            SHARE_CODE=code
         )
-        if codes
-        else pd.DataFrame()
-    )
+        for code in codes
+    ]
+    legs = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
     if not legs.empty:
         legs["UPCOMING"] = is_upcoming(legs.KICKOFF_AT)
 
@@ -315,7 +315,7 @@ def popular_slips() -> None:
         if waiting:
             st.caption(
                 f"{int(waiting)} upcoming slips have no verdict yet. Sixty are written "
-                "every half hour, never-summarised and most-copied first."
+                "every warm cycle, never-summarised and most-copied first."
             )
         if shown_up.empty:
             st.info("No upcoming slip has a verdict yet.")

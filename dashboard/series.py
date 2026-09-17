@@ -143,9 +143,7 @@ def arbitrage_series(
     return pd.DataFrame(rows, columns=columns)
 
 
-def latest_odds(
-    ticks: pd.DataFrame, until: pd.Timestamp | None = None
-) -> pd.DataFrame:
+def latest_odds(ticks: pd.DataFrame, until: pd.Timestamp | None = None) -> pd.DataFrame:
     """The last price per (outcome, book) at or before `until`."""
     if ticks.empty:
         return ticks

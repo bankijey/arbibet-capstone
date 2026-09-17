@@ -4,7 +4,8 @@
 # code, so this is a short list rather than the whole pipeline's dependency
 # set. Deploying a Spark job to a dashboard host would be absurd.
 streamlit>=1.39,<2
-snowflake-connector-python[pandas]>=3.12,<4
+# The serving database (Supabase Postgres); the dashboard never reads the warehouse.
+psycopg[binary]>=3.2,<4
 pandas>=2.2,<3
 # For local runs. On Streamlit Cloud there is no .env and load_dotenv is a no-op.
 python-dotenv>=1.0,<2

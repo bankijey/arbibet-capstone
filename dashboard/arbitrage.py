@@ -7,8 +7,8 @@ from typing import NamedTuple
 
 
 class Split(NamedTuple):
-    arbitrage: float            # return per unit staked, whatever wins
-    fractions: list[float]      # share of the stake per leg, summing to 1
+    arbitrage: float  # return per unit staked, whatever wins
+    fractions: list[float]  # share of the stake per leg, summing to 1
 
 
 def stake_split(odds: Sequence[float]) -> Split | None:
