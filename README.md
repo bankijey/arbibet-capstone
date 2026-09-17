@@ -128,13 +128,24 @@ recorded and retried on the next cycle.
 
 **Match verification.** The matcher upstream occasionally files two fixtures
 under one event id, which makes two unrelated prices look like a surebet.
-Before any fixture's prices are compared, each book's payload is checked
-against the fixture's teams -- by name, and by gpt-4o-mini when names only
-partly agree (`src/arbibet_capstone/verify.py`). A book found on a different
-match is excluded from that fixture everywhere (hot loop, price history,
-tracking, dbt, publish, Telegram), its signals are removed, the verdict and
-reason are recorded in `core.fixture_check`, the dashboard lists it under
-*Books excluded from fixtures*, and the owner is told on Telegram. Warm jobs yield to the hot loop while
+Each book's payload is checked against the fixture's teams by name
+(`src/arbibet_capstone/verify.py`; optionally gpt-4o-mini for names that only
+partly agree, confirmed by gpt-4o). A book that seems to price a different
+match becomes a **candidate** in `core.fixture_check` and on the local review
+dashboard; nothing is excluded until a person decides there. A confirmed
+exclusion applies everywhere (hot loop, price history, tracking, dbt, publish,
+Telegram) and removes the book's signals for that fixture.
+
+## Local dashboard
+
+```bash
+python -m streamlit run dashboard/local.py
+```
+
+Runs on the pipeline machine, reading `data/local/` (bind-mounted from the
+runner): pipeline health from `status.json`, and the match-review queue from
+`fixture_checks.json`. Decisions are written to `decisions.json`, which the
+runner applies within a minute. Warm jobs yield to the hot loop while
 it recomputes, and the runner reaches the source databases over their Docker
 networks rather than `host.docker.internal` (35× faster for bronze payloads).
 

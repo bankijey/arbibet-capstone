@@ -145,9 +145,13 @@ services:
       PYSPARK_PYTHON: /usr/local/bin/python
       DUCKDB_PATH: /data/arbibet.duckdb
       LAKE_PATH: /data/lake
+      # Status and the match-review queue, for the LOCAL dashboard
+      # (dashboard/local.py): a bind mount, because that runs on the host.
+      LOCAL_DIR: /data/local
     volumes:
       - .:/opt/project
       - warehouse:/data
+      - ./data/local:/data/local
       # Spark downloads the Postgres JDBC driver once; keep it across restarts.
       - spark_ivy:/root/.ivy2
     # Time to finish the job in hand and checkpoint DuckDB on `docker stop`.

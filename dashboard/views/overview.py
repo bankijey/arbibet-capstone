@@ -18,7 +18,6 @@ import streamlit as st
 from dashboard.arbitrage import stake_split
 from dashboard.charts import arbitrage_chart, book_bars, efficiency_bars, odds_chart
 from dashboard.common import (
-    TIMEZONE,
     document,
     flags,
     frame,
@@ -642,41 +641,8 @@ def _hidden_flags(active: pd.DataFrame) -> None:
 
 
 @st.fragment
-def _excluded_books() -> None:
-    rows = doc["arbitrage"].get("excluded") or []
-    if not rows:
-        return
-    with st.expander(f"Books excluded from fixtures ({len(rows)})", expanded=False):
-        st.caption(
-            "The matcher upstream sometimes files two matches under one fixture. Every "
-            "book's payload is checked against the fixture's teams before its prices are "
-            "compared -- by name, and by gpt-4o-mini when names only partly agree -- and a "
-            "book found on a different match is excluded from that fixture, its signals "
-            "removed. This is that record."
-        )
-        table = pd.DataFrame(rows)
-        table["kickoffAt"] = pd.to_datetime(table.kickoffAt, utc=True).dt.tz_convert(TIMEZONE)
-        table["checkedAt"] = pd.to_datetime(table.checkedAt, utc=True).dt.tz_convert(TIMEZONE)
-        table["listed"] = table.bookHome.fillna("?") + " v " + table.bookAway.fillna("?")
-        st.dataframe(
-            table[["fixture", "kickoffAt", "book", "listed", "method", "explanation", "checkedAt"]],
-            hide_index=True,
-            use_container_width=True,
-            column_config={
-                "fixture": "Fixture",
-                "kickoffAt": st.column_config.DatetimeColumn("Kick-off", format="D MMM HH:mm"),
-                "book": "Book",
-                "listed": "The book lists",
-                "method": "Found by",
-                "explanation": "Why",
-                "checkedAt": st.column_config.DatetimeColumn("Checked", format="D MMM HH:mm"),
-            },
-        )
-
-
 def arbitrage_section() -> None:
     data = _data()
-    _excluded_books()
     legs, track, standing = data["surebet_legs"], data["track"], data["standing"]
     upcoming = legs[legs.UPCOMING & legs.PRE_MATCH.eq(True)]
     past = legs[~legs.UPCOMING]

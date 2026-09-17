@@ -47,6 +47,7 @@ from runner.observe import Observer  # noqa: E402
 from runner.serve import SignalPublisher  # noqa: E402
 from runner.telegram import TelegramService  # noqa: E402
 from runner.telegram import configured as telegram_configured  # noqa: E402
+from runner.verifier import local_dir  # noqa: E402
 from runner.verifier import shared as shared_verifier  # noqa: E402
 
 load_env()
@@ -193,9 +194,10 @@ def main() -> int:
             observer.beat("telegram", "error", error="did not start; see runner log")
             telegram = None
     alerts = telegram.submit if telegram else None
-    # Books found pricing a different match under a fixture's id are excluded
-    # before any price is compared; the owner hears about each one.
-    verifier = shared_verifier(warehouse, telegram.mismatch if telegram else None)
+    # Books proposed as pricing a different match under a fixture's id go to a
+    # local review queue; only a confirmed decision excludes one (runner/verifier.py).
+    verifier = shared_verifier(warehouse)
+    verifier.write_local()
     hot = HotLoop(
         warehouse,
         observer,
@@ -230,6 +232,11 @@ def main() -> int:
                 hot_alive=threads["hot"].is_alive(),
             )
             observer.write_status(database_path().parent / "status.json")
+            observer.write_status(local_dir() / "status.json")
+            try:
+                verifier.apply_decisions()
+            except Exception:
+                log.warning("could not apply review decisions", exc_info=True)
             if not threads["hot"].is_alive() and not stop.is_set():
                 log.error("hot loop died; restarting it")
                 threads["hot"] = HotLoop(

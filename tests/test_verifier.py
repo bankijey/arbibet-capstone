@@ -1,5 +1,5 @@
-"""The verification gate against a real (temporary) DuckDB: verdicts persist, wrong
-books are excluded, their signals purged, and the model is asked once."""
+"""The review queue against a real (temporary) DuckDB: proposals persist, nothing is
+excluded until a decision, a decision purges, and the model is asked once."""
 
 from __future__ import annotations
 
@@ -23,6 +23,8 @@ KICKOFF = datetime(2026, 9, 20, 17, 30, tzinfo=UTC)
 def wh(tmp_path, monkeypatch):
     monkeypatch.setenv("DUCKDB_PATH", str(tmp_path / "test.duckdb"))
     monkeypatch.setenv("LAKE_PATH", str(tmp_path / "lake"))
+    monkeypatch.setenv("LOCAL_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("VERIFY_WITH_MODEL", "0")
     monkeypatch.setattr(warehouse, "_database", None)
     yield warehouse.connect()
     warehouse._database.close()
@@ -46,18 +48,14 @@ PAYLOADS = {
 
 
 def _signals(wh) -> None:
-    legs = [
-        {"outcome_id": "12", "bookmaker": "livescorebet", "odds": 2.1},
-        {"outcome_id": "13", "bookmaker": "msport", "odds": 1.98},
-    ]
     merge_bulk(
         wh,
         table="fact_arbitrage_signal",
         rows=[
             {
-                "signal_key": "k-bad",
+                "signal_key": key,
                 "event_id": str(EVENT),
-                "market_id": "18;2.5",
+                "market_id": market,
                 "market_base_id": 18,
                 "specifier": "2.5",
                 "arbitrage": 1.019,
@@ -68,25 +66,25 @@ def _signals(wh) -> None:
                 "leg_spread_seconds": 0,
                 "detected_at": KICKOFF,
                 "consumed_at": KICKOFF,
-            },
-            {
-                "signal_key": "k-fine",
-                "event_id": str(EVENT),
-                "market_id": "1",
-                "market_base_id": 1,
-                "specifier": None,
-                "arbitrage": 1.01,
-                "n_legs": 2,
-                "legs": [
-                    {"outcome_id": "1", "bookmaker": "livescorebet", "odds": 2.0},
-                    {"outcome_id": "2", "bookmaker": "bet9ja", "odds": 2.1},
-                ],
-                "oldest_leg_fire_time": KICKOFF,
-                "newest_leg_fire_time": KICKOFF,
-                "leg_spread_seconds": 0,
-                "detected_at": KICKOFF,
-                "consumed_at": KICKOFF,
-            },
+            }
+            for key, market, legs in (
+                (
+                    "k-bad",
+                    "18;2.5",
+                    [
+                        {"outcome_id": "12", "bookmaker": "livescorebet", "odds": 2.1},
+                        {"outcome_id": "13", "bookmaker": "msport", "odds": 1.98},
+                    ],
+                ),
+                (
+                    "k-fine",
+                    "1",
+                    [
+                        {"outcome_id": "1", "bookmaker": "livescorebet", "odds": 2.0},
+                        {"outcome_id": "2", "bookmaker": "bet9ja", "odds": 2.1},
+                    ],
+                ),
+            )
         ],
         key=["signal_key"],
         json_columns={"legs"},
@@ -123,37 +121,81 @@ def _signals(wh) -> None:
     )
 
 
-def test_a_wrong_book_is_excluded_recorded_purged_and_reported(wh):
-    _signals(wh)
-    told: list[tuple[str, str]] = []
-    verifier = FixtureVerifier(wh, on_mismatch=lambda f, c: told.append((c.bookmaker, c.verdict)))
-    verifier.client = None
+def _keys(wh, table: str) -> set[str]:
+    return set(wh.query(f"SELECT signal_key FROM {table}").SIGNAL_KEY)
 
+
+def test_a_wrong_book_is_only_proposed_until_a_person_decides(wh, tmp_path):
+    _signals(wh)
+    verifier = FixtureVerifier(wh)
+
+    accepted, result = verifier.check(LEVSKI, PAYLOADS)
+    # Proposed, not excluded: every payload still goes through, nothing is purged.
+    assert set(accepted) == {"livescorebet", "msport", "betking"}
+    assert result.checks["msport"].verdict == "candidate"
+    assert "betking" not in result.checks
+    assert verifier.mismatched() == {}
+    assert _keys(wh, "fact_arbitrage_signal") == {"k-bad", "k-fine"}
+    rows = wh.query("SELECT bookmaker_name, verdict, explanation FROM fixture_check")
+    assert dict(zip(rows.BOOKMAKER_NAME, rows.VERDICT, strict=True)) == {
+        "livescorebet": "ok",
+        "msport": "candidate",
+    }
+    # ...and the queue file carries it, with the fixture named.
+    queue = json.loads((tmp_path / "local" / "fixture_checks.json").read_text(encoding="utf-8"))
+    (row,) = (c for c in queue["checks"] if c["book"] == "msport")
+    assert row["verdict"] == "candidate" and row["fixture"] == "Levski Sofia v Ludogorets"
+
+    # The person excludes it: applied, purged, and the check now drops the book.
+    (tmp_path / "local" / "decisions.json").write_text(
+        json.dumps(
+            [{"eventId": str(EVENT), "book": "msport", "verdict": "mismatch", "note": "merged"}]
+        ),
+        encoding="utf-8",
+    )
+    assert verifier.apply_decisions() == 1
+    assert verifier.mismatched() == {str(EVENT): {"msport"}}
+    assert _keys(wh, "fact_arbitrage_signal") == {"k-fine"}
+    assert _keys(wh, "fact_ev_signal") == {"ev-livescorebet"}
     accepted, result = verifier.check(LEVSKI, PAYLOADS)
     assert set(accepted) == {"livescorebet", "betking"}
     assert result.checks["msport"].verdict == "mismatch"
-    assert "betking" not in result.checks
-    assert told == [("msport", "mismatch")]
-
-    # Recorded with its reason, and the wrong book's signals are gone -- only its.
-    rows = wh.query("SELECT bookmaker_name, verdict, method, explanation FROM fixture_check")
-    assert dict(zip(rows.BOOKMAKER_NAME, rows.VERDICT, strict=True)) == {
-        "livescorebet": "ok",
-        "msport": "mismatch",
-    }
-    assert "Etar" in rows[rows.BOOKMAKER_NAME == "msport"].EXPLANATION.iloc[0]
-    keys = set(wh.query("SELECT signal_key FROM fact_arbitrage_signal").SIGNAL_KEY)
-    assert keys == {"k-fine"}
-    ev = set(wh.query("SELECT signal_key FROM fact_ev_signal").SIGNAL_KEY)
-    assert ev == {"ev-livescorebet"}
-    assert verifier.mismatched() == {str(EVENT): {"msport"}}
-
-    # Second time: same verdicts, nothing re-reported, and a fresh instance reads them back.
-    verifier.check(LEVSKI, PAYLOADS)
-    assert told == [("msport", "mismatch")]
+    assert result.checks["msport"].method == "review"
+    # Unchanged file: nothing re-applied. A fresh instance reads the decision back.
+    assert verifier.apply_decisions() == 0
     again = FixtureVerifier(wh)
-    again.client = None
     assert again.mismatched() == {str(EVENT): {"msport"}}
+    note = wh.query("SELECT note, reviewed_at FROM fixture_check WHERE bookmaker_name = 'msport'")
+    assert note.NOTE.iloc[0] == "merged" and note.REVIEWED_AT.notna().all()
+
+    # A re-check never overwrites the decision or its note.
+    verifier.check(LEVSKI, PAYLOADS)
+    note = wh.query("SELECT verdict, note FROM fixture_check WHERE bookmaker_name = 'msport'")
+    assert note.VERDICT.iloc[0] == "mismatch" and note.NOTE.iloc[0] == "merged"
+
+
+def test_clearing_keeps_the_book_and_reversing_works(wh, tmp_path):
+    verifier = FixtureVerifier(wh)
+    verifier.check(LEVSKI, PAYLOADS)
+    decisions = tmp_path / "local" / "decisions.json"
+    decisions.write_text(
+        json.dumps([{"eventId": str(EVENT), "book": "msport", "verdict": "cleared"}]),
+        encoding="utf-8",
+    )
+    assert verifier.apply_decisions() == 1
+    accepted, result = verifier.check(LEVSKI, PAYLOADS)
+    assert "msport" in accepted and result.checks["msport"].verdict == "cleared"
+    # A newer decision the other way is applied too.
+    import os
+    import time
+
+    decisions.write_text(
+        json.dumps([{"eventId": str(EVENT), "book": "msport", "verdict": "mismatch"}]),
+        encoding="utf-8",
+    )
+    os.utime(decisions, (time.time() + 5, time.time() + 5))
+    assert verifier.apply_decisions() == 1
+    assert verifier.mismatched() == {str(EVENT): {"msport"}}
 
 
 class _Client:
@@ -176,7 +218,7 @@ class _Client:
         )
 
 
-def test_the_model_settles_a_partial_match_once(wh):
+def test_the_model_proposes_a_partial_match_once(wh):
     fixture = Fixture(EVENT, KICKOFF, "Flora II", "Kalev", None, None, None, None, None)
     payloads = {
         "msport": _payload(
@@ -187,7 +229,9 @@ def test_the_model_settles_a_partial_match_once(wh):
     verifier.client = _Client(same=False)
     verifier.escalate = None  # the confirmation step is tested in test_verify
     accepted, result = verifier.check(fixture, payloads)
-    assert accepted == {} and result.checks["msport"].method == "model"
+    assert set(accepted) == {"msport"}  # a proposal excludes nothing
+    assert result.checks["msport"].verdict == "candidate"
+    assert result.checks["msport"].method == "model"
     assert verifier.client.calls == 1
     verifier.check(fixture, payloads)
     assert verifier.client.calls == 1  # remembered, not re-asked

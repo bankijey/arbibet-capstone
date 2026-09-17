@@ -361,7 +361,7 @@ def verify(
         prior = (known or {}).get(book)
         if (
             prior is not None
-            and prior.verdict in ("ok", "mismatch")
+            and prior.verdict in ("ok", "mismatch", "candidate")
             and (prior.home, prior.away) == (check.home, check.away)
         ):
             result.checks[book] = prior
@@ -443,6 +443,8 @@ def row(event_id: str, check: Check, at: datetime, model: str | None) -> dict[st
         "method": check.method,
         "explanation": check.explanation,
         "model": f"{model}#{PROMPT_VERSION}" if check.method == "model" else None,
+        "reviewed_at": None,
+        "note": None,
     }
 
 

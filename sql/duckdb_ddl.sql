@@ -197,9 +197,17 @@ CREATE TABLE IF NOT EXISTS fixture_check (
     book_away       VARCHAR,
     method          VARCHAR,                 -- names | model | none
     explanation     VARCHAR,
-    model           VARCHAR
+    model           VARCHAR,
+    reviewed_at     TIMESTAMPTZ,             -- set when a person decided
+    note            VARCHAR
 
 );
+ALTER TABLE fixture_check ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ;
+ALTER TABLE fixture_check ADD COLUMN IF NOT EXISTS note VARCHAR;
+-- Only a person excludes a book (verdict 'mismatch'); an automatic finding is
+-- a 'candidate' for review. Anything excluded before the review queue existed
+-- goes back into the queue.
+UPDATE fixture_check SET verdict = 'candidate' WHERE verdict = 'mismatch' AND reviewed_at IS NULL;
 
 -- Legs a viewer flagged from the dashboard as not on the site. Hidden from the
 -- signal tables for as long as `active`; unflagging sets it false, never
