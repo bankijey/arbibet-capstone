@@ -133,5 +133,33 @@ def test_model_is_asked_once_for_the_ambiguous_books_only():
 def test_row_shape():
     check = Check("msport", "A", "B", "mismatch", "model", "different match")
     r = verify.row("e", check, None, "gpt-4o-mini")
-    assert r["bookmaker_name"] == "msport" and r["model"] == "gpt-4o-mini"
+    assert r["bookmaker_name"] == "msport" and r["model"].startswith("gpt-4o-mini#")
     assert verify.row("e", Check("m", "A", "B", "ok", "names", "x"), None, "m")["model"] is None
+
+
+def test_books_that_agree_with_each_other_outvote_a_stale_label():
+    # Cuniburo renamed itself Vinotinto FC; API-Football still says Cuniburo.
+    payloads = {
+        b: json.dumps({"data": {"homeTeam": "Vinotinto FC Ecuador", "awayTeam": "9 de Octubre"}})
+        for b in ("bet9ja", "msport", "sportybet")
+    }
+    result = verify.verify({"home": "Cuniburo", "away": "9 de Octubre"}, payloads, None)
+    assert {c.verdict for c in result.checks.values()} == {"ok"}
+    assert result.checks["msport"].method == "consensus"
+    # A lone book against the label and the other books stays out (Levski).
+    result = verify.verify(FIXTURE, PAYLOADS, None)
+    assert result.checks["livescorebet"].verdict == "ok"
+    assert set(result.mismatched) == {"sportybet", "msport", "bet9ja"}
+    # Consensus never applies while any book matches the label.
+    mixed = dict(PAYLOADS)
+    mixed["ilotbet"] = json.dumps({"data": {"homeTeam": "Real Madrid", "awayTeam": "Getafe"}})
+    result = verify.verify(FIXTURE, mixed, None)
+    assert result.checks["ilotbet"].verdict == "mismatch"
+    assert set(result.mismatched) == {"sportybet", "msport", "bet9ja", "ilotbet"}
+
+
+def test_model_rows_carry_the_prompt_version():
+    check = Check("msport", "A", "B", "mismatch", "model", "different")
+    assert verify.row("e", check, None, "gpt-4o-mini")["model"] == (
+        f"gpt-4o-mini#{verify.PROMPT_VERSION}"
+    )

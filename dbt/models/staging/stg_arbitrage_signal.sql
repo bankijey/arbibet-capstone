@@ -43,6 +43,6 @@ where not exists (
     from unnest(cast(s.legs as json[])) as leg(value)
     join {{ source('core', 'fixture_check') }} c
       on c.event_id = s.event_id
-     and c.bookmaker_name = leg.value ->> '$.bookmaker'
+     and c.bookmaker_name = json_extract_string(leg.value, '$.bookmaker')
      and c.verdict = 'mismatch'
 )

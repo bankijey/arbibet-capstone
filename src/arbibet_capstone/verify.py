@@ -44,6 +44,9 @@ from typing import Any
 log = logging.getLogger("arbibet_capstone.verify")
 
 MODEL = "gpt-4o-mini"
+# Bumped whenever the prompt or the rules change: cached model verdicts from an
+# older version are asked again rather than trusted.
+PROMPT_VERSION = "v2"
 
 # Tokens that say nothing about which club it is.
 _NOISE = {
@@ -245,13 +248,21 @@ def by_names(
 
 
 _SYSTEM = """You check whether bookmakers are listing the same football match. \
-You are given one fixture (home team, away team, competition, kick-off) and, for \
-each bookmaker, the home and away team names it lists under that fixture's id. \
-Different spellings, transliterations, abbreviations and club-name prefixes or \
-suffixes (FC, PFC, 1919, Razgrad, Sofia) are the SAME club. A reserve, youth, \
-under-21 or women's side is a DIFFERENT team from the senior side. Answer with \
-JSON only: {"books": {"<bookmaker>": {"same_match": true|false, "reason": "<one \
-short sentence>"}}}. Use only the names given."""
+You are given one fixture (home team, away team, competition, kick-off), the \
+names the other bookmakers list for it, and for each bookmaker IN QUESTION the \
+home and away team names it lists under that fixture's id. Every listing shares \
+the fixture's kick-off time.
+
+Clubs appear under many names for the same club: spellings, transliterations, \
+abbreviations, prefixes and suffixes (FC, PFC, SC, 1919, Razgrad, Sofia), \
+language variants (Liège/Luik/Lüttich, Cologne/Köln), sponsor or stadium names, \
+district names, and recent rebrands (a club that changed its name). All of \
+those are the SAME club: answer true. Answer false ONLY when the names plainly \
+denote a different pair of clubs -- two other teams entirely -- or a reserve, \
+second, youth, under-21/23 or women's side where the fixture is the senior side \
+(or the reverse). If you are unsure whether a name is an alias, answer true. \
+Answer with JSON only: {"books": {"<bookmaker>": {"same_match": true|false, \
+"reason": "<one short sentence>"}}}. Use only the names given."""
 
 
 def by_model(
@@ -259,13 +270,18 @@ def by_model(
     fixture: Mapping[str, Any],
     names: Mapping[str, tuple[str, str]],
     model: str = MODEL,
+    context: Mapping[str, tuple[str, str]] | None = None,
 ) -> dict[str, Check]:
-    """Ask the model about the books in `names`. Raises on failure: the caller decides."""
+    """Ask the model about the books in `names`, showing it the other books' names
+    (`context`) as well. Raises on failure: the caller decides."""
     lines = [
         f"Fixture: {fixture.get('home')} v {fixture.get('away')}; competition "
         f"{fixture.get('tournament') or 'unknown'}; kick-off {fixture.get('kickoff')}.",
-        "Bookmakers:",
     ]
+    if context:
+        lines.append("Other bookmakers list it as:")
+        lines += [f"- {book}: {home} v {away}" for book, (home, away) in context.items()]
+    lines.append("Bookmakers in question:")
     for book, (home, away) in names.items():
         lines.append(f"- {book}: {home} v {away}")
     response = client.chat.completions.create(
@@ -348,10 +364,47 @@ def verify(
         if c.verdict == "unverified" and c.home and c.away
     }
     if pending and client is not None:
+        context = {
+            b: (c.home, c.away)
+            for b, c in result.checks.items()
+            if b not in pending and c.home and c.away
+        }
         try:
-            result.checks.update(by_model(client, fixture, pending, model))  # type: ignore[arg-type]
+            result.checks.update(
+                by_model(client, fixture, pending, model, context)  # type: ignore[arg-type]
+            )
         except Exception as err:
             log.warning("model check failed for %s: %s", fixture.get("home"), err)
+    return consensus(result)
+
+
+def consensus(result: Result) -> Result:
+    """When NO book matches the fixture's label but every book agrees with every
+    other, the prices are comparable and it is the label that is stale (a
+    renamed club, an odd spelling in the projection). If even one book matches
+    the label, the label stands and the books that disagree with it stay
+    excluded -- that is exactly the merged-event case."""
+    named = {b: c for b, c in result.checks.items() if c.home and c.away}
+    if len(named) < 2 or any(c.verdict == "ok" for c in named.values()):
+        return result
+    checks = list(named.values())
+    first = checks[0]
+    if all(
+        similarity(first.home, c.home) >= CLEAR_MATCH
+        and similarity(first.away, c.away) >= CLEAR_MATCH
+        for c in checks[1:]
+    ):
+        for book, check in named.items():
+            result.checks[book] = Check(
+                book,
+                check.home,
+                check.away,
+                "ok",
+                "consensus",
+                f"all {len(named)} books list {check.home} v {check.away}; "
+                "the fixture label differs",
+                check.score,
+            )
     return result
 
 
@@ -377,7 +430,7 @@ def row(event_id: str, check: Check, at: datetime, model: str | None) -> dict[st
         "book_away": check.away,
         "method": check.method,
         "explanation": check.explanation,
-        "model": model if check.method == "model" else None,
+        "model": f"{model}#{PROMPT_VERSION}" if check.method == "model" else None,
     }
 
 

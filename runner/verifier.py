@@ -57,9 +57,12 @@ class FixtureVerifier:
             return
         frame = self.warehouse.query(
             "SELECT event_id, bookmaker_name, checked_at, verdict, book_home, book_away, method, "
-            "explanation FROM core.fixture_check"
+            "explanation, model FROM core.fixture_check"
         )
+        current = f"{self.model}#{verify.PROMPT_VERSION}"
         for r in frame.itertuples(index=False):
+            if r.METHOD == "model" and r.MODEL != current:
+                continue  # an older prompt's verdict: ask again
             self._cache.setdefault(str(r.EVENT_ID), {})[str(r.BOOKMAKER_NAME)] = Check(
                 str(r.BOOKMAKER_NAME),
                 None if r.BOOK_HOME is None else str(r.BOOK_HOME),
