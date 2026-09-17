@@ -190,3 +190,13 @@ def test_model_rows_carry_the_prompt_version():
     assert verify.row("e", check, None, "gpt-4o-mini")["model"] == (
         f"gpt-4o-mini#{verify.PROMPT_VERSION}"
     )
+
+
+def test_livescorebet_match_name_beats_its_competition_name():
+    payload = json.dumps(
+        {
+            "header": {"category": {"name": "Austria - Bundesliga"}},
+            "event": {"categoryName": "Austria - Bundesliga", "name": "Rapid Wien - WSG Tirol"},
+        }
+    )
+    assert team_names("livescorebet", payload) == ("Rapid Wien", "WSG Tirol")

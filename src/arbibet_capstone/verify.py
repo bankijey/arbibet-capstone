@@ -149,6 +149,13 @@ def _find(node: Any, keys: tuple[str, ...], depth: int = 0) -> Any:
     return None
 
 
+# Where the match name lives in each book's payload, when it is one string.
+# Books that give home and away separately (sportybet, msport) are found by
+# the key search, which sees their fields before anything else.
+_KNOWN_PATHS: dict[str, tuple[str, ...]] = {
+    "bet9ja": ("D", "DS"),
+    "livescorebet": ("event", "name"),
+}
 _HOME_KEYS = ("homeTeamName", "homeTeam", "home_team", "homeName", "home")
 _AWAY_KEYS = ("awayTeamName", "awayTeam", "away_team", "awayName", "away")
 _MATCH_KEYS = ("DS", "name", "eventName", "matchName", "title")
@@ -162,6 +169,17 @@ def team_names(bookmaker: str, payload: bytes | str | dict) -> tuple[str, str] |
         return None
     if not isinstance(data, dict):
         return None
+    # Each book's own field first; the generic search below is the fallback,
+    # and it once took livescorebet's competition name ("Austria - Bundesliga")
+    # for the match.
+    known = _KNOWN_PATHS.get(bookmaker)
+    if known:
+        node: Any = data
+        for key in known[:-1]:
+            node = node.get(key) if isinstance(node, dict) else None
+        pair = _pair(node.get(known[-1]) if isinstance(node, dict) else None)
+        if pair:
+            return pair
     home, away = _find(data, _HOME_KEYS), _find(data, _AWAY_KEYS)
     if isinstance(home, dict):
         home = home.get("name")
