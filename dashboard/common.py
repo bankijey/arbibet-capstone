@@ -143,8 +143,7 @@ def _run(sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
 
 def unavailable(err: Exception) -> None:
     st.error(
-        "The dashboard cannot reach its data right now. It will try again in a few "
-        "minutes."
+        "The dashboard cannot reach its data right now. It will try again in a few " "minutes."
     )
     # The full error goes to the app's log for the owner, not onto a public page.
     print(f"serving database error: {err}", file=sys.stderr)

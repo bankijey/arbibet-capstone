@@ -21,8 +21,12 @@ Dashboard: <https://arbibet.streamlit.app>
   API-Football give each slip leg and fixture a measured base rate.
 - **Explains.** `gpt-4o-mini` writes pre-match briefs, slip verdicts and
   post-match notes from warehouse data only, shown beside the numbers they cite.
-- **Alerts on Telegram.** A bot messages subscribers the moment a surebet or
-  positive-EV price appears, and answers the dashboard's questions as commands.
+- **Alerts on Telegram, sized to your money.** A bot messages subscribers the
+  moment a surebet or positive-EV price appears, with stakes sized to their
+  balances at each book, and keeps a wallet of placed bets, real and paper,
+  settled from the same results the platform settles everything with.
+- **Shows its track record first.** A paper wallet placed on every signal,
+  compounding, beside how the most-copied booking slips actually did.
 - **Observes itself.** Every job and component is recorded and shown on a
   Pipeline health page.
 
@@ -135,12 +139,21 @@ the same Supabase documents as the dashboard and never touch DuckDB.
   and never on a flagged leg. Each shows legs, links and a stake split. Sent
   once per market or outcome, and again only if the value improves by 0.005
   (surebet) or 0.02 (EV).
-- **Commands:** `/surebets` (cards, stake split, arbitrage over time, flag a
-  leg, deep dive), `/stake 100 2.10 1.95`, `/ev 0.02`, `/slips`, `/dive
-  <search>`, `/flags`, `/health`, `/settings`, `/start`, `/stop`.
-- **State:** `bot.subscriber` and `bot.alert` in Supabase, with row-level
-  security and no dashboard access. Flags go to `serving.leg_flag`, shared
-  with the dashboard.
+- **Wallet:** `/balance msport 50000` records cash at a book; alerts are then
+  sized to it (the largest split every leg's balance allows, the binding book
+  named). **Placed** records the bet and moves the stakes; `/placed 4700 5000`
+  corrects them; **Odds changed** re-splits at the site's prices; **Paper**
+  does the same in a practice wallet that starts at ₦100,000 per book.
+  `/wallet` shows equity, locked-in profit on open surebets and settled P&L.
+  Bets settle in the warm loop from `fact_team_market_result`, leg by leg.
+- **Access:** anyone may read; sizing, the wallet and Placed need a balance
+  set; the owner (`TELEGRAM_OWNER_CHAT`) has `/admin`. Deep dives show a
+  screen and link the rest to the dashboard.
+- **Commands:** `/surebets`, `/ev 0.02`, `/stake 100 2.10 1.95`, `/slips`,
+  `/dive <search>`, `/flags`, `/health`, `/settings`, `/start`, `/stop`.
+- **State:** `bot.subscriber`, `bot.alert`, `bot.balance`, `bot.bet` and
+  `bot.report` in Supabase, with row-level security and no dashboard access.
+  Flags go to `serving.leg_flag`, shared with the dashboard.
 
 Create a bot with @BotFather and set `TELEGRAM_BOT_TOKEN` in `.env`; the bot
 is off without it. `TELEGRAM_ALLOWED_CHATS` optionally restricts who may use it.
@@ -181,6 +194,7 @@ Streamlit secrets: `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER` and
 
 | Path | Contents |
 |---|---|
+| `dashboard/views/record.py` | Track record: the paper wallet and how copied slips fared |
 | `runner/` | Listener, loops, Supabase publisher, Telegram bot, observability, Docker image |
 | `src/arbibet_capstone/` | Bronze reader, crosswalk and parsers (vendored), signals, warehouse layer |
 | `dbt/` | Staging and gold models with tests |

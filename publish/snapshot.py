@@ -59,7 +59,15 @@ ROOT = Path(__file__).resolve().parents[1]
 # tested; importing them keeps one definition of each.
 sys.path.insert(0, str(ROOT))
 
-from dashboard.backtest import SIZINGS, TIMINGS, choose, compare, simulate  # noqa: E402
+from dashboard.backtest import (  # noqa: E402
+    SIZINGS,
+    SUREBET_MIN,
+    TIMINGS,
+    choose,
+    compare,
+    paper_wallet,
+    simulate,
+)
 from dashboard.series import POINTS, reduce_steps  # noqa: E402
 
 from arbibet_capstone.env import load as load_env  # noqa: E402
@@ -490,6 +498,67 @@ def signals(wh: Warehouse) -> dict[str, Any]:
             ),
             "backtest": backtest(settled),
         },
+        "record": record(wh, settled),
+    }
+
+
+def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
+    """The track record: a paper wallet placed on every alertable signal, and
+    how copied slips fared. What a visitor should see first."""
+    surebets = wh.query(
+        f"""
+        SELECT s.event_id, s.market_id, s.arbitrage, s.detected_at, f.kickoff_at,
+               f.home_team || ' v ' || f.away_team AS fixture
+        FROM ANALYTICS.stg_arbitrage_signal s
+        JOIN CORE.dim_fixture f ON f.event_id = s.event_id
+        WHERE s.is_surebet AND s.arbitrage >= {SUREBET_MIN} AND s.detected_at < f.kickoff_at
+        QUALIFY row_number() OVER (PARTITION BY s.event_id, s.market_id ORDER BY s.detected_at) = 1
+        ORDER BY s.detected_at
+        """
+    )
+    now = pd.Timestamp.now(tz="UTC")
+    ev = choose(settled, "first")
+    wallet = paper_wallet(surebets, ev, now)
+    slips = wh.query(
+        """
+        SELECT o.share_code, o.followed_times, o.legs, o.won, o.lost, o.combined_odds,
+               o.last_kickoff
+        FROM ANALYTICS.gold_slip_overview o
+        WHERE o.last_kickoff < current_timestamp AND o.won + o.lost = o.legs AND o.legs > 0
+        """
+    )
+    slips_won = int((slips.LOST == 0).sum()) if not slips.empty else 0
+    copies = float(slips.FOLLOWED_TIMES.fillna(0).sum()) if not slips.empty else 0.0
+    copies_won = (
+        float(slips.loc[slips.LOST == 0, "FOLLOWED_TIMES"].fillna(0).sum())
+        if not slips.empty
+        else 0.0
+    )
+    legs = int(slips.LEGS.sum()) if not slips.empty else 0
+    return {
+        "wallet": {
+            "start": 100_000.0,
+            "surebetMin": SUREBET_MIN,
+            "surebets": wallet.surebets,
+            "evBets": wallet.ev_bets,
+            "evWon": wallet.ev_won,
+            "staked": _clean(wallet.staked),
+            "profit": _clean(wallet.profit),
+            "final": _clean(wallet.final),
+            "maxDrawdown": _clean(wallet.max_drawdown),
+            "openBets": wallet.open_bets,
+            "from": _iso(surebets.DETECTED_AT.min()) if not surebets.empty else None,
+            "curve": _points(wallet.curve, "AT", "BANKROLL"),
+        },
+        "slips": {
+            "settled": int(len(slips)),
+            "won": slips_won,
+            "legs": legs,
+            "legsWon": int(slips.WON.sum()) if not slips.empty else 0,
+            "copies": copies,
+            "copiesWon": copies_won,
+            "medianOdds": _clean(float(slips.COMBINED_ODDS.median())) if not slips.empty else None,
+        },
     }
 
 
@@ -548,7 +617,9 @@ def slips(wh: Warehouse) -> dict[str, Any]:
             WHERE o.last_kickoff > current_timestamp
               AND o.share_code NOT IN (SELECT share_code FROM CORE.gold_slip_summary_ai)
             """
-        ).iloc[0].N
+        )
+        .iloc[0]
+        .N
     )
     now = pd.Timestamp.now(tz="UTC")
     upcoming = pd.to_datetime(cards.LAST_KICKOFF, utc=True) > now
@@ -704,9 +775,7 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
     form = pd.DataFrame()
     market_record = pd.DataFrame()
     if wanted:
-        values = ", ".join(
-            f"({team}, '{before:%Y-%m-%d}'::DATE)" for team, before in set(wanted)
-        )
+        values = ", ".join(f"({team}, '{before:%Y-%m-%d}'::DATE)" for team, before in set(wanted))
         form = wh.query(
             f"""
             WITH wanted (team_id, before) AS (VALUES {values})
@@ -798,7 +867,8 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
             for market_id, market in sorted(
                 # Ties broken by id: the snapshot must be identical build to build, or
                 # the serving publisher sees a change that is not one.
-                event_ticks.groupby("MARKET_ID"), key=lambda kv: (-int(kv[1].N.iloc[0]), kv[0])
+                event_ticks.groupby("MARKET_ID"),
+                key=lambda kv: (-int(kv[1].N.iloc[0]), kv[0]),
             ):
                 reduced = reduce_steps(
                     market, x="FIRE_TIME", y="ODDS", by=["OUTCOME", "BOOKMAKER_NAME"], points=POINTS
@@ -827,8 +897,9 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
                 (int(f.AWAY_TEAM_ID), f.AWAY_TEAM, "away"),
             ):
                 mine = (
-                    form[(form.TEAM_ID == team_id) & (form.BEFORE.astype(str) == before)]
-                    .sort_values("MATCH_DATE", ascending=False)
+                    form[
+                        (form.TEAM_ID == team_id) & (form.BEFORE.astype(str) == before)
+                    ].sort_values("MATCH_DATE", ascending=False)
                     if not form.empty
                     else form
                 )
@@ -859,7 +930,12 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
             dive["settled"] = sorted(
                 dive["settled"],
                 key=lambda s: (
-                    -s["landed"] / s["of"], -s["of"], s["side"], s["market"], s["period"], s["pick"]
+                    -s["landed"] / s["of"],
+                    -s["of"],
+                    s["side"],
+                    s["market"],
+                    s["period"],
+                    s["pick"],
                 ),
             )[:40]
         event_picks = picks_by_event.get(f.EVENT_ID)

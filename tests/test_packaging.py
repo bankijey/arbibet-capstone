@@ -32,9 +32,7 @@ def test_the_container_venv_carries_every_runtime_dependency() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     declared = _names(project["project"]["dependencies"])
     installed = _names(
-        (ROOT / "airflow" / "requirements-pipeline.txt")
-        .read_text(encoding="utf-8")
-        .splitlines()
+        (ROOT / "airflow" / "requirements-pipeline.txt").read_text(encoding="utf-8").splitlines()
     )
 
     missing = declared - installed

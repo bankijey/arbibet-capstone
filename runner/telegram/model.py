@@ -30,6 +30,8 @@ class Leg:
     book: str
     odds: float
     url: str | None = None
+    # The betradar outcome id, so a placed leg can be settled.
+    outcome_id: str | None = None
 
 
 @dataclass(frozen=True)

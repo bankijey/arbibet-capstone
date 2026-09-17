@@ -60,7 +60,14 @@ Where a leg shows "form: none", there is no settled history for it. Say so if \
 it matters. Do not invent a record.
 
 After the bold opener, answer in two or three sentences, plain and specific. \
-Name the legs that stand out and why."""
+Name the legs that stand out and why.
+
+Close with ONE short, level sentence that sets the slip's chance against the \
+alternative a measured bettor has: a single price that beats its probability, \
+or two prices that together return more than the stake whichever outcome \
+lands. Keep it a comparison of odds and probability -- no products, no advice, \
+no "you should", no exclamation. If the slip is a LIKELY one, say instead that \
+its return is small for the risk it still carries."""
 
 
 class SlipLeg(NamedTuple):

@@ -247,7 +247,9 @@ def popular_slips() -> None:
         "Booking slips other people copied, each leg checked against how often "
         "that exact market has actually landed for the sides involved. The "
         "summary is written by gpt-4o-mini from the table beside it — the numbers "
-        "are the model's input, shown so you can judge the output."
+        "are the model's input, shown so you can judge the output. Most legs land; "
+        "the slip is all of them multiplied, and the price already says how often "
+        "that happens. The Track record page shows the alternative construction."
     )
     st.caption(
         "**Upcoming** slips still have at least one fixture to play; a slip with "

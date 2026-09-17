@@ -18,7 +18,7 @@ _FIXTURE = Fixture(
     apifootball_id=1,
     home_team_id=44,
     away_team_id=55,
-                sr_match_id="sr:match:1",
+    sr_match_id="sr:match:1",
 )
 
 
@@ -320,9 +320,7 @@ def _bet9ja_home(snapshot: Snapshot) -> dict[str, object]:
 def test_the_most_recently_published_probability_is_used() -> None:
     # msport published two minutes after sportybet. The old fixed priority
     # would have used sportybet's older 0.60 anyway.
-    row = _bet9ja_home(
-        _two_probability_books(_NEW - timedelta(minutes=2), _NEW, _NEW)
-    )
+    row = _bet9ja_home(_two_probability_books(_NEW - timedelta(minutes=2), _NEW, _NEW))
 
     assert row["p_source"] == "msport"
     assert round(float(row["ev"]), 4) == round(0.55 * 2.10 - 1, 4)
@@ -339,9 +337,7 @@ def test_a_probability_too_old_for_the_price_is_refused() -> None:
 
     # Both probabilities are twenty minutes older than bet9ja's price. The
     # price may be current; what it is being judged against may not be.
-    stale = _two_probability_books(
-        _NEW - timedelta(minutes=20), _NEW - timedelta(minutes=20), _NEW
-    )
+    stale = _two_probability_books(_NEW - timedelta(minutes=20), _NEW - timedelta(minutes=20), _NEW)
 
     assert [r for r in ev_rows(stale) if r["bookmaker"] == "bet9ja"] == []
 

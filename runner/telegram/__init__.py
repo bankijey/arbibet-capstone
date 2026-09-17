@@ -47,6 +47,9 @@ COUNTERS = (
     "command_errors",
     "poll_errors",
     "flags_set",
+    "bets_recorded",
+    "balances_set",
+    "odds_reports",
 )
 
 
@@ -73,6 +76,7 @@ class TelegramService:
             for c in os.environ.get("TELEGRAM_ALLOWED_CHATS", "").replace(" ", "").split(",")
             if c
         } or None
+        owner = os.environ.get("TELEGRAM_OWNER_CHAT")
         self.alerter = Alerter(self.api, self.store, warehouse, self.stats, stop)
         self.bot = Bot(
             self.api,
@@ -82,7 +86,11 @@ class TelegramService:
             stop,
             allowed=allowed,
             on_subscribers_changed=self.alerter.refresh_subscribers,
+            owner=int(owner) if owner else None,
+            dashboard=os.environ.get("DASHBOARD_URL", "https://arbibet.streamlit.app"),
         )
+        # Alert buttons (Placed, Odds changed, Not on site) are the bot's handlers.
+        self.alerter.callbacks = self.bot.callbacks
         self.started_at = datetime.now(UTC)
 
     # The hot loop's hook.

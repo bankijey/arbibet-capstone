@@ -11,8 +11,7 @@ def _page(codes: list[str], has_more: int) -> dict[str, object]:
         "data": {
             "hasMore": has_more,
             "codeList": [
-                {"shareCode": c, "id": f"id-{c}", "followedTimes": 100, "folds": 3}
-                for c in codes
+                {"shareCode": c, "id": f"id-{c}", "followedTimes": 100, "folds": 3} for c in codes
             ],
         }
     }
@@ -90,8 +89,6 @@ def test_the_hash_ignores_key_order() -> None:
 def test_a_failed_list_page_raises(status: int) -> None:
     # The list is the fetch's spine; a failure here means no slips at all, and
     # silently returning an empty fetch would read as "msport had nothing".
-    client = httpx.Client(
-        transport=httpx.MockTransport(lambda r: httpx.Response(status, json={}))
-    )
+    client = httpx.Client(transport=httpx.MockTransport(lambda r: httpx.Response(status, json={})))
     with client, pytest.raises(httpx.HTTPStatusError):
         list_codes(client, _FAST)

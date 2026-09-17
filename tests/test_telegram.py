@@ -20,6 +20,7 @@ from runner.telegram.model import (
     recipients,
     split_stake,
 )
+from runner.telegram.wallet import size_ev, size_surebet
 
 NOW = datetime(2026, 9, 17, 12, 0, tzinfo=UTC)
 LATER = NOW + timedelta(hours=3)
@@ -172,7 +173,10 @@ def _balanced(text: str) -> bool:
 
 
 def test_surebet_alert_escapes_and_shows_the_split():
-    text = render.alert(surebet(), 100, NOW)
+    sizing = size_surebet(
+        [2.10, 2.05], ["bet9ja", "sportybet"], {"bet9ja": 1e6, "sportybet": 1e6}, 100
+    )
+    text = render.alert(surebet(), NOW, sizing)
     assert "SUREBET 1.0200" in text
     assert "Arsenal &lt;U21&gt; v Chelsea &amp; Co" in text
     assert 'href="https://a.example/x?y=1&amp;z=2"' in text
@@ -182,7 +186,7 @@ def test_surebet_alert_escapes_and_shows_the_split():
 
 
 def test_ev_alert_shows_probability_and_fair_odds():
-    text = render.alert(ev(0.034), 50, NOW)
+    text = render.alert(ev(0.034), NOW, size_ev(0.034, 2.2, "msport", {"msport": 50}, 50, 50))
     assert "EV +3.40%" in text
     assert "fair odds 2.13" in text
     assert _balanced(text)

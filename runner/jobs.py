@@ -15,6 +15,7 @@ WARM (every 15 minutes, in order):
     brief_fixtures     pre-match AI briefs, when their evidence moved
     summarise_upcoming AI slip verdicts, 60 per run
     summarise_results  post-match AI notes
+    settle_bets        subscribers' Telegram wallet bets, from the results
     publish            serving tables to Supabase (when configured)
 
 COLD (daily at 06:00 Berlin):
@@ -141,6 +142,23 @@ def publish(warehouse: Warehouse, full: bool = False) -> Callable[[Run], None]:
     return job
 
 
+def settle_bets(warehouse: Warehouse) -> Callable[[Run], None]:
+    """Settle Telegram subscribers' bets against the warehouse's results."""
+
+    def job(run: Run) -> None:
+        from runner import telegram
+        from runner.telegram.settle import settle_open_bets
+        from runner.telegram.store import Store
+
+        if not telegram.configured():
+            run.skipped = True
+            run.detail["reason"] = "TELEGRAM_BOT_TOKEN not set"
+            return
+        run.rows_written = settle_open_bets(Store(), warehouse, run)
+
+    return job
+
+
 def compact(warehouse: Warehouse) -> Callable[[Run], None]:
     def job(run: Run) -> None:
         run.detail["files_removed"] = compact_slips(warehouse)
@@ -212,6 +230,7 @@ def warm_jobs(warehouse: Warehouse) -> list[Job]:
             ),
         ),
         Job("summarise_results", script("enrich/result_summary.py")),
+        Job("settle_bets", settle_bets(warehouse)),
         Job("publish", publish(warehouse)),
     ]
 

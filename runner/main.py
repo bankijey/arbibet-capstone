@@ -75,8 +75,14 @@ def _logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def run_cycle(loop: str, jobs: list[Job], observer: Observer, last_run: dict[str, datetime],
-              stop: threading.Event, slot: datetime | None = None) -> None:
+def run_cycle(
+    loop: str,
+    jobs: list[Job],
+    observer: Observer,
+    last_run: dict[str, datetime],
+    stop: threading.Event,
+    slot: datetime | None = None,
+) -> None:
     """Run each due job once, in order.
 
     `slot` is the wall-clock time the cycle was scheduled for. A job's `every`
@@ -192,8 +198,9 @@ def main() -> int:
     hot.start()
 
     observer.beat("runner", "started", pid=os.getpid(), started_at=datetime.now(UTC))
-    log.info("runner started: warm every %.0f min, cold daily at %02d:00 Berlin",
-             WARM_MINUTES, COLD_HOUR)
+    log.info(
+        "runner started: warm every %.0f min, cold daily at %02d:00 Berlin", WARM_MINUTES, COLD_HOUR
+    )
     # The first cycle runs at once, as if scheduled for the current slot.
     next_warm = _slot(datetime.now(UTC))
     next_cold = _next_cold(datetime.now(UTC))

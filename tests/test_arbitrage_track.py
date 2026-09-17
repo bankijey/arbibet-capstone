@@ -50,9 +50,9 @@ def _payload(
 def test_a_surebet_opens_closes_and_is_recorded_below_one(books) -> None:
     history = [
         _payload(books, "msport", 0, _market(3.20, 3.00, 2.20)),
-        _payload(books, "sportybet", 1, _market(2.20, 3.10, 2.60)),   # below 1
-        _payload(books, "sportybet", 2, _market(2.20, 4.00, 3.50)),   # 1.179 surebet
-        _payload(books, "msport", 3, _market(2.00, 3.00, 2.20)),      # closes
+        _payload(books, "sportybet", 1, _market(2.20, 3.10, 2.60)),  # below 1
+        _payload(books, "sportybet", 2, _market(2.20, 4.00, 3.50)),  # 1.179 surebet
+        _payload(books, "msport", 3, _market(2.00, 3.00, 2.20)),  # closes
     ]
 
     track = replay(FIXTURE, history, {"1"}, mappings=None)
@@ -92,7 +92,10 @@ def test_a_resumed_replay_does_not_re_emit_an_unchanged_state(books) -> None:
     # msport re-fires with the same prices; nothing about the market changed.
     later = [_payload(books, "msport", 2, _market(3.20, 3.00, 2.20))]
     resumed = replay(
-        FIXTURE, later, {"1"}, mappings=None,
+        FIXTURE,
+        later,
+        {"1"},
+        mappings=None,
         seed_payloads=seed,
         seed_state={"1": (last.arbitrage, True)},
     )

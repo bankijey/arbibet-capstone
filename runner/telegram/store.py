@@ -11,6 +11,10 @@ The bot's own state lives in a `bot` schema:
                      default stake, mute
     bot.alert        (chat, opportunity) -> the value last alerted, so a
                      restart does not re-send everything
+    bot.balance      cash per (chat, mode, bookmaker); mode is real or paper
+    bot.bet          every placed bet, real or paper, with its legs and, once
+                     settled, each leg's verdict and payout
+    bot.report       "odds changed" and "not on site" reports from alerts
 
 Row-level security is enabled on both with NO policies: the dashboard's login
 cannot read chat ids. The runner connects as the tables' owner.
@@ -21,11 +25,12 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, TypeVar
 
 import psycopg
+from psycopg.types.json import Jsonb
 
 from runner.serve import _connect, configured
 from runner.telegram.model import Ledger, Subscriber
@@ -57,11 +62,53 @@ CREATE TABLE IF NOT EXISTS bot.alert (
     PRIMARY KEY (chat_id, key)
 );
 
-ALTER TABLE bot.subscriber ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bot.alert ENABLE ROW LEVEL SECURITY;
+CREATE TABLE IF NOT EXISTS bot.balance (
+    chat_id     bigint NOT NULL,
+    mode        text NOT NULL,
+    book        text NOT NULL,
+    amount      double precision NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (chat_id, mode, book)
+);
+
+CREATE TABLE IF NOT EXISTS bot.bet (
+    bet_id           bigserial PRIMARY KEY,
+    chat_id          bigint NOT NULL,
+    mode             text NOT NULL,
+    kind             text NOT NULL,
+    opportunity_key  text,
+    event_id         text NOT NULL,
+    market_id        text NOT NULL,
+    fixture          text,
+    market           text,
+    kickoff_at       timestamptz,
+    placed_at        timestamptz NOT NULL DEFAULT now(),
+    source           text,
+    status           text NOT NULL DEFAULT 'open',
+    settled_at       timestamptz,
+    profit           double precision,
+    legs             jsonb NOT NULL
+);
+CREATE INDEX IF NOT EXISTS bet_chat ON bot.bet (chat_id, placed_at DESC);
+CREATE INDEX IF NOT EXISTS bet_open ON bot.bet (status, kickoff_at);
+
+CREATE TABLE IF NOT EXISTS bot.report (
+    report_id    bigserial PRIMARY KEY,
+    chat_id      bigint NOT NULL,
+    event_id     text NOT NULL,
+    market_id    text NOT NULL,
+    book         text NOT NULL,
+    kind         text NOT NULL,
+    odds         double precision,
+    reported_at  timestamptz NOT NULL DEFAULT now()
+);
+
 DO $$
-DECLARE r text;
+DECLARE t text; r text;
 BEGIN
+    FOREACH t IN ARRAY ARRAY['subscriber', 'alert', 'balance', 'bet', 'report'] LOOP
+        EXECUTE format('ALTER TABLE bot.%I ENABLE ROW LEVEL SECURITY', t);
+    END LOOP;
     FOREACH r IN ARRAY ARRAY['anon', 'authenticated', 'dashboard_reader'] LOOP
         IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
             EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA bot FROM %I', r);
@@ -78,6 +125,10 @@ VERSION_TTL = 15.0
 ALERT_RETENTION = timedelta(days=7)
 
 _SUBSCRIBER_COLUMNS = "chat_id, username, active, surebets, ev, ev_min, stake, muted_until"
+_BET_COLUMNS = (
+    "bet_id, chat_id, mode, kind, opportunity_key, event_id, market_id, fixture, market, "
+    "kickoff_at, placed_at, source, status, settled_at, profit, legs"
+)
 
 
 class Store:
@@ -254,3 +305,155 @@ class Store:
         return self._run(
             lambda c: c.execute("DELETE FROM bot.alert WHERE alerted_at < %s", (since,)).rowcount
         )
+
+    # --- the wallet -------------------------------------------------------------------
+
+    def balances(self, chat_id: int, mode: str) -> dict[str, float]:
+        rows = self._run(
+            lambda c: c.execute(
+                "SELECT book, amount FROM bot.balance WHERE chat_id = %s AND mode = %s",
+                (chat_id, mode),
+            ).fetchall()
+        )
+        return {str(b): float(a) for b, a in rows}
+
+    def set_balance(self, chat_id: int, mode: str, book: str, amount: float) -> None:
+        self._run(
+            lambda c: c.execute(
+                """
+                INSERT INTO bot.balance (chat_id, mode, book, amount) VALUES (%s, %s, %s, %s)
+                ON CONFLICT (chat_id, mode, book)
+                DO UPDATE SET amount = EXCLUDED.amount, updated_at = now()
+                """,
+                (chat_id, mode, book, amount),
+            )
+        )
+
+    def move_balances(self, chat_id: int, mode: str, deltas: Mapping[str, float]) -> None:
+        """Add each delta to its book's balance in one transaction (a missing row counts as 0)."""
+
+        def go(c: psycopg.Connection) -> None:
+            with c.transaction():
+                for book, delta in deltas.items():
+                    c.execute(
+                        """
+                        INSERT INTO bot.balance (chat_id, mode, book, amount)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (chat_id, mode, book)
+                        DO UPDATE SET amount = bot.balance.amount + EXCLUDED.amount,
+                                      updated_at = now()
+                        """,
+                        (chat_id, mode, book, delta),
+                    )
+
+        self._run(go)
+
+    def _bet(self, row: tuple[Any, ...]) -> dict[str, Any]:
+        keys = [k.strip() for k in _BET_COLUMNS.split(",")]
+        return dict(zip(keys, row, strict=True))
+
+    def add_bet(self, bet: Mapping[str, Any]) -> int:
+        row = self._run(
+            lambda c: c.execute(
+                """
+                INSERT INTO bot.bet (chat_id, mode, kind, opportunity_key, event_id, market_id,
+                                     fixture, market, kickoff_at, placed_at, source, legs)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING bet_id
+                """,
+                (
+                    bet["chat_id"],
+                    bet["mode"],
+                    bet["kind"],
+                    bet.get("opportunity_key"),
+                    bet["event_id"],
+                    bet["market_id"],
+                    bet.get("fixture"),
+                    bet.get("market"),
+                    bet.get("kickoff_at"),
+                    bet["placed_at"],
+                    bet.get("source"),
+                    Jsonb(bet["legs"]),
+                ),
+            ).fetchone()
+        )
+        assert row is not None
+        return int(row[0])
+
+    def update_bet_legs(self, bet_id: int, legs: list[dict[str, Any]]) -> None:
+        self._run(
+            lambda c: c.execute(
+                "UPDATE bot.bet SET legs = %s WHERE bet_id = %s", (Jsonb(legs), bet_id)
+            )
+        )
+
+    def settle_bet(
+        self, bet_id: int, legs: list[dict[str, Any]], profit: float, status: str = "settled"
+    ) -> None:
+        self._run(
+            lambda c: c.execute(
+                "UPDATE bot.bet SET legs = %s, profit = %s, status = %s, settled_at = now() "
+                "WHERE bet_id = %s",
+                (Jsonb(legs), profit, status, bet_id),
+            )
+        )
+
+    def bets(self, chat_id: int, mode: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
+        rows = self._run(
+            lambda c: c.execute(
+                f"SELECT {_BET_COLUMNS} FROM bot.bet WHERE chat_id = %s "
+                "AND (%s::text IS NULL OR mode = %s) ORDER BY placed_at DESC LIMIT %s",
+                (chat_id, mode, mode, limit),
+            ).fetchall()
+        )
+        return [self._bet(r) for r in rows]
+
+    def bet(self, bet_id: int) -> dict[str, Any] | None:
+        row = self._run(
+            lambda c: c.execute(
+                f"SELECT {_BET_COLUMNS} FROM bot.bet WHERE bet_id = %s", (bet_id,)
+            ).fetchone()
+        )
+        return self._bet(row) if row else None
+
+    def open_bets(self, kicked_off_before: datetime) -> list[dict[str, Any]]:
+        rows = self._run(
+            lambda c: c.execute(
+                f"SELECT {_BET_COLUMNS} FROM bot.bet WHERE status = 'open' AND kickoff_at < %s "
+                "ORDER BY kickoff_at",
+                (kicked_off_before,),
+            ).fetchall()
+        )
+        return [self._bet(r) for r in rows]
+
+    def add_report(
+        self,
+        chat_id: int,
+        event_id: str,
+        market_id: str,
+        book: str,
+        kind: str,
+        odds: float | None = None,
+    ) -> None:
+        self._run(
+            lambda c: c.execute(
+                "INSERT INTO bot.report (chat_id, event_id, market_id, book, kind, odds) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (chat_id, event_id, market_id, book, kind, odds),
+            )
+        )
+
+    def counts(self) -> dict[str, int]:
+        """For the owner: subscribers, signed users, bets and reports."""
+        row = self._run(
+            lambda c: c.execute(
+                "SELECT (SELECT count(*) FROM bot.subscriber WHERE active), "
+                "(SELECT count(DISTINCT chat_id) FROM bot.balance WHERE mode = 'real'), "
+                "(SELECT count(*) FROM bot.bet WHERE mode = 'real'), "
+                "(SELECT count(*) FROM bot.bet WHERE mode = 'paper'), "
+                "(SELECT count(*) FROM bot.report)"
+            ).fetchone()
+        )
+        assert row is not None
+        keys = ("subscribers", "signed", "real_bets", "paper_bets", "reports")
+        return dict(zip(keys, (int(v) for v in row), strict=True))

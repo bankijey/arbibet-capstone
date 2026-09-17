@@ -83,10 +83,19 @@ def test_the_signature_changes_when_a_leg_does() -> None:
 def test_rows_group_into_slips_by_share_code() -> None:
     rows = [
         {
-            "SHARE_CODE": code, "FOLLOWED_TIMES": 5, "HOME_TEAM": "A", "AWAY_TEAM": "B",
-            "MARKET_NAME": "1X2", "MARKET_FAMILY": "1x2", "OUTCOME_NAME": "Home",
-            "SIDE_OR_LINE": "home", "ODDS": 1.5, "IMPLIED_RATE": 0.67,
-            "HISTORICAL_RATE": 0.4, "WINS": 4, "MATCHES": 10,
+            "SHARE_CODE": code,
+            "FOLLOWED_TIMES": 5,
+            "HOME_TEAM": "A",
+            "AWAY_TEAM": "B",
+            "MARKET_NAME": "1X2",
+            "MARKET_FAMILY": "1x2",
+            "OUTCOME_NAME": "Home",
+            "SIDE_OR_LINE": "home",
+            "ODDS": 1.5,
+            "IMPLIED_RATE": 0.67,
+            "HISTORICAL_RATE": 0.4,
+            "WINS": 4,
+            "MATCHES": 10,
         }
         for code in ("B2X", "B2X", "B2Y")
     ]
@@ -124,9 +133,7 @@ def test_the_signature_changes_when_only_the_evidence_does() -> None:
     priced = _leg(odds=2.0)
     lost_its_history = _leg(odds=2.0, historical_rate=None, wins=None, matches=None)
 
-    assert Slip("B2X", 1, [priced]).signature() != Slip(
-        "B2X", 1, [lost_its_history]
-    ).signature()
+    assert Slip("B2X", 1, [priced]).signature() != Slip("B2X", 1, [lost_its_history]).signature()
 
 
 def test_a_likely_slip_is_not_forced_into_a_rarity_claim() -> None:
@@ -135,8 +142,12 @@ def test_a_likely_slip_is_not_forced_into_a_rarity_claim() -> None:
     # 84% likely. Below odds 2.0 the warehouse leaves one_in_n NULL, and the
     # opener must frame it as a LIKELY outcome instead.
     slip = Slip(
-        "B2X", 8462, [_leg(odds=1.17), _leg(odds=1.02)],
-        combined_odds=1.19, combined_probability=1 / 1.19, one_in_n=None,
+        "B2X",
+        8462,
+        [_leg(odds=1.17), _leg(odds=1.02)],
+        combined_odds=1.19,
+        combined_probability=1 / 1.19,
+        one_in_n=None,
     )
     body = build_prompt(slip)[1]["content"]
 

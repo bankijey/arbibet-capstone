@@ -36,6 +36,7 @@ from runner.telegram.model import (
     recipients,
 )
 from runner.telegram.store import Store
+from runner.telegram.wallet import size_ev, size_surebet
 
 log = logging.getLogger("runner.telegram.alerts")
 
@@ -63,6 +64,8 @@ class Alerter(threading.Thread):
         self.stop = stop
         self.queue: queue.Queue[tuple[Any, ...]] = queue.Queue(1000)
         self.ledger = Ledger()
+        # The bot's button-token table, shared so alert buttons reach its handlers.
+        self.callbacks: Any = None
         self._markets: tuple[float, dict[str, str]] = (0.0, {})
         self._subscribers: tuple[float, list[Any]] = (0.0, [])
 
@@ -158,6 +161,7 @@ class Alerter(threading.Thread):
                             ),
                             book=leg["bookmaker"],
                             odds=float(leg["odds"]),
+                            outcome_id=str(leg["outcome_id"]),
                         )
                         for leg in row["legs"]
                     ),
@@ -181,6 +185,7 @@ class Alerter(threading.Thread):
                             outcome=row.get("outcome_name") or f"outcome {row['outcome_id']}",
                             book=row["bookmaker"],
                             odds=float(row["odds"]),
+                            outcome_id=str(row["outcome_id"]),
                         ),
                     ),
                     detected_at=row["detected_at"],
@@ -190,6 +195,47 @@ class Alerter(threading.Thread):
                 )
             )
         return best_per_key(found)
+
+    # --- sizing and buttons ------------------------------------------------------------------
+
+    def sizing(self, subscriber: Any, opp: Opportunity) -> Any:
+        """Stakes from the subscriber's real balances; None for one who has set none."""
+        balances = self.store.balances(subscriber.chat_id, "real")
+        if not balances:
+            return None
+        if opp.kind == "surebet":
+            return size_surebet(
+                [leg.odds for leg in opp.legs],
+                [leg.book for leg in opp.legs],
+                balances,
+                subscriber.stake,
+            )
+        leg = opp.legs[0]
+        return size_ev(
+            opp.value, leg.odds, leg.book, balances, sum(balances.values()), subscriber.stake
+        )
+
+    def keyboard(self, opp: Opportunity, signed: bool) -> list[list[dict[str, str]]]:
+        if self.callbacks is None:
+            return []
+        put = self.callbacks.put
+        if signed:
+            return [
+                [
+                    {"text": "✅ Placed", "callback_data": put("placed", opp, "real")},
+                    {"text": "📝 Paper", "callback_data": put("placed", opp, "paper")},
+                ],
+                [
+                    {"text": "✏️ Odds changed", "callback_data": put("odds", opp)},
+                    {"text": "🚩 Not on site", "callback_data": put("missing", opp)},
+                ],
+            ]
+        return [
+            [
+                {"text": "📝 Paper bet", "callback_data": put("placed", opp, "paper")},
+                {"text": "🚩 Not on site", "callback_data": put("missing", opp)},
+            ]
+        ]
 
     # --- sending ---------------------------------------------------------------------------
 
@@ -222,7 +268,12 @@ class Alerter(threading.Thread):
             )
             for subscriber in due:
                 try:
-                    self.api.send(subscriber.chat_id, render.alert(opp, subscriber.stake, now))
+                    sizing = self.sizing(subscriber, opp)
+                    self.api.send(
+                        subscriber.chat_id,
+                        render.alert(opp, now, sizing),
+                        self.keyboard(opp, signed=sizing is not None),
+                    )
                 except TelegramError as err:
                     self.stats["send_errors"] = self.stats.get("send_errors", 0) + 1
                     self.stats["last_error"] = str(err)[:300]

@@ -118,11 +118,31 @@ def _upcoming(value: Any, now: datetime) -> bool:
 # --- alerts ---------------------------------------------------------------------------
 
 
-def alert(opp: Opportunity, stake: float, now: datetime) -> str:
+NUDGE = (
+    "<i>Stakes sized to your own balances at each book: set them with "
+    "<code>/balance msport 50000</code>.</i>"
+)
+
+
+def sizing_lines(sizing: Any) -> list[str]:
+    """What limited the suggested total, if anything."""
+    lines = []
+    if sizing.short:
+        lines.append(
+            f"<i>No balance at {', '.join(e(b) for b in sizing.short)}: set it with /balance.</i>"
+        )
+    elif sizing.limited_by:
+        lines.append(f"<i>Total limited by your {e(sizing.limited_by)} balance.</i>")
+    return lines
+
+
+def alert(opp: Opportunity, now: datetime, sizing: Any = None) -> str:
+    """`sizing` is the subscriber's suggested stakes (runner.telegram.wallet.Sizing);
+    None for a reader who has not set balances, who sees the prices and a nudge."""
     head = f"<b>{e(opp.fixture)}</b>" + (f" · {e(opp.tournament)}" if opp.tournament else "")
     kick = f"kick-off {when(opp.kickoff)} ({until(opp.kickoff, now)})"
+    stakes = list(sizing.stakes) if sizing and sizing.total > 0 else None
     if opp.kind == "surebet":
-        split = split_stake([leg.odds for leg in opp.legs], stake)
         lines = [
             f"🟢 <b>SUREBET {opp.value:.4f}</b> · {pct(opp.value - 1)} guaranteed",
             head,
@@ -130,16 +150,23 @@ def alert(opp: Opportunity, stake: float, now: datetime) -> str:
             "",
         ]
         for i, leg in enumerate(opp.legs):
-            share = f" · stake <b>{money(split['stakes'][i])}</b>" if split else ""
+            share = f" · stake <b>{money(stakes[i])}</b>" if stakes else ""
             lines.append(
                 f"• {e(leg.outcome)} @ <b>{leg.odds:.2f}</b> {link(leg.url, leg.book)}{share}"
             )
-        if split:
+        if stakes:
+            total = sum(stakes)
+            returns = total * opp.value
             lines += [
                 "",
-                f"Stake {money(stake)} returns <b>{money(split['returns'])}</b> whatever wins "
-                f"({money(split['profit'])} profit).",
+                f"Stake {money(total)} returns <b>{money(returns)}</b> whatever wins "
+                f"({money(returns - total)} profit).",
+                *sizing_lines(sizing),
             ]
+        elif sizing is None:
+            lines += ["", NUDGE]
+        else:
+            lines += ["", *sizing_lines(sizing)]
         if opp.spread_seconds is not None:
             lines.append(
                 f"<i>Legs priced {opp.spread_seconds}s apart. Check every price on the site "
@@ -159,12 +186,70 @@ def alert(opp: Opportunity, stake: float, now: datetime) -> str:
             f"Probability {opp.probability:.1%} ({e(opp.p_source)}) → fair odds "
             f"{1 / opp.probability:.2f}"
         )
-        kelly = opp.value / (leg.odds - 1) if leg.odds > 1 else 0.0
-        if kelly > 0:
-            lines.append(
-                f"Quarter-Kelly: {kelly / 4:.1%} of bankroll ({money(stake * kelly / 4)} of "
-                f"{money(stake)})"
-            )
+    if stakes:
+        lines.append(
+            f"Suggested stake <b>{money(stakes[0])}</b> (a quarter of Kelly on your "
+            f"{e(leg.book)} balance)"
+        )
+        lines += sizing_lines(sizing)
+    elif sizing is None:
+        lines.append(NUDGE)
+    else:
+        lines += sizing_lines(sizing)
+    return clip("\n".join(lines))
+
+
+def bet_summary(bet: dict[str, Any]) -> str:
+    """One placed bet, as a line or two."""
+    legs = bet["legs"]
+    staked = sum(leg["stake"] for leg in legs)
+    mark = {"open": "⏳", "settled": "✅" if (bet.get("profit") or 0) >= 0 else "❌"}.get(
+        bet["status"], "➖"
+    )
+    if bet["status"] == "settled":
+        outcome = f"{money(bet['profit'] or 0)} {'profit' if (bet['profit'] or 0) >= 0 else 'loss'}"
+    elif bet["kind"] == "surebet" and legs:
+        locked = min(leg["stake"] * leg["odds"] for leg in legs) - staked
+        outcome = f"locks in {money(locked)}"
+    else:
+        outcome = "open"
+    parts = ", ".join(
+        f"{e(leg['outcome'])} @ {leg['odds']:.2f} {e(leg['book'])} {money(leg['stake'])}"
+        for leg in legs
+    )
+    paper = " (paper)" if bet["mode"] == "paper" else ""
+    return (
+        f"{mark} <b>{e(bet['fixture'])}</b> · {e(bet['market'])}{paper}\n"
+        f"   {parts} → {outcome} · {when(bet['kickoff_at'])}"
+    )
+
+
+def wallet(
+    mode: str, balances: dict[str, float], stats: dict[str, Any], open_bets: list[dict[str, Any]]
+) -> str:
+    title = "💼 <b>Wallet</b>" if mode == "real" else "📝 <b>Paper wallet</b>"
+    lines = [title, ""]
+    if balances:
+        lines.append(
+            "Balances: "
+            + " · ".join(f"{e(b)} <b>{money(a)}</b>" for b, a in sorted(balances.items()))
+        )
+    else:
+        lines.append("No balances set. <code>/balance msport 50000</code>")
+    roi = f" · ROI {stats['roi']:+.1%}" if stats.get("roi") is not None else ""
+    lines += [
+        f"Equity <b>{money(stats['equity'])}</b> = cash {money(stats['cash'])} + "
+        f"{money(stats['open_stake'])} in {stats['open_bets']} open bet"
+        f"{'' if stats['open_bets'] == 1 else 's'}",
+        f"Locked-in profit on open surebets: <b>{money(stats['locked_profit'])}</b>",
+        f"Settled: {stats['settled_bets']} bets, {stats['settled_won']} won, "
+        f"P&amp;L <b>{money(stats['profit'])}</b>{roi}",
+    ]
+    if open_bets:
+        lines += ["", "<b>Open</b>"]
+        lines += [bet_summary(b) for b in open_bets[:8]]
+        if len(open_bets) > 8:
+            lines.append(f"… and {len(open_bets) - 8} more")
     return clip("\n".join(lines))
 
 
@@ -211,6 +296,7 @@ def surebet_cards(
                 "legs": [
                     {
                         "outcome": leg["outcome"],
+                        "outcomeId": str(leg.get("outcomeId")),
                         "book": leg["book"],
                         "odds": leg["odds"],
                         "url": leg.get("url"),

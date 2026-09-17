@@ -89,7 +89,11 @@ def wh(tmp_path, monkeypatch):
 def test_the_schema_is_applied_and_seeded_once(wh) -> None:
     warehouse.connect()  # a second connect must not re-seed
     assert warehouse.bookmaker_ids(wh) == {
-        "sportybet": 1, "msport": 2, "ilotbet": 3, "bet9ja": 4, "livescorebet": 5,
+        "sportybet": 1,
+        "msport": 2,
+        "ilotbet": 3,
+        "bet9ja": 4,
+        "livescorebet": 5,
     }
 
 

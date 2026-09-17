@@ -38,11 +38,18 @@ st.set_page_config(page_title="Arbibet", page_icon="::", layout="wide")
 
 navigation = st.navigation(
     [
+        # First: the proof. What placing every signal would have done, and how
+        # copied slips fared -- the case for the signals before the signals.
+        st.Page(
+            "views/record.py",
+            title="Track record",
+            url_path="record",
+            default=True,
+        ),
         st.Page(
             "views/overview.py",
             title="Market signals",
             url_path="overview",
-            default=True,
         ),
         st.Page(
             "views/slips.py",
