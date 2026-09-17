@@ -25,6 +25,7 @@ Still no `arbibet_capstone` import: Streamlit Community Cloud installs from
 from __future__ import annotations
 
 import os
+import threading
 from typing import Any
 
 import pandas as pd
@@ -73,11 +74,17 @@ def _connection() -> psycopg.Connection:
     )
 
 
+# Streamlit serves each session on its own thread, and a psycopg connection
+# must not run two statements at once. Reads are small and cached, so one
+# connection behind a lock is plenty.
+_LOCK = threading.Lock()
+
+
 def _run(sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
     """Run a statement, reconnecting once if the cached connection went away."""
     for attempt in (1, 2):
         try:
-            with _connection().cursor() as cur:
+            with _LOCK, _connection().cursor() as cur:
                 cur.execute(sql, params)
                 return cur.fetchall() if cur.description else []
         except psycopg.OperationalError:
