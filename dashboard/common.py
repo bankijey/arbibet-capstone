@@ -25,7 +25,9 @@ Still no `arbibet_capstone` import: Streamlit Community Cloud installs from
 from __future__ import annotations
 
 import os
+import sys
 import threading
+import time
 from typing import Any
 
 import pandas as pd
@@ -66,13 +68,43 @@ def setting(name: str, default: str | None = None) -> str:
     return value
 
 
+def _connect_kwargs() -> dict[str, Any]:
+    """Connection settings from secrets.
+
+    Either separate parts -- SUPABASE_HOST, SUPABASE_USER, SUPABASE_PASSWORD,
+    and optionally SUPABASE_PORT (6543) and SUPABASE_DB (postgres) -- or one
+    SUPABASE_DB_URL. Separate parts are safer: a password containing @ : / # ?
+    or % breaks a URL unless percent-encoded, and the failure looks exactly
+    like a wrong password.
+    """
+    try:
+        password = setting("SUPABASE_PASSWORD")
+    except RuntimeError:
+        return {"conninfo": setting("SUPABASE_DB_URL")}
+    return {
+        "host": setting("SUPABASE_HOST"),
+        "port": int(setting("SUPABASE_PORT", "6543")),
+        "user": setting("SUPABASE_USER"),
+        "password": password,
+        "dbname": setting("SUPABASE_DB", "postgres"),
+    }
+
+
 @st.cache_resource(show_spinner=False)
 def _connection() -> psycopg.Connection:
     # prepare_threshold=None: Supabase's pooler cannot keep prepared statements.
     return psycopg.connect(
-        setting("SUPABASE_DB_URL"), autocommit=True, prepare_threshold=None, connect_timeout=15
+        **_connect_kwargs(), autocommit=True, prepare_threshold=None, connect_timeout=15
     )
 
+
+# After a failed LOGIN, stop trying for this long. `st.cache_resource` does not
+# cache exceptions, so every rerun of every visitor's page would otherwise
+# attempt the login again -- and Supabase's pooler answers repeated failures by
+# blocking ALL new connections for that user (ECIRCUITBREAKER), which then
+# outlives the fix.
+LOGIN_BACKOFF = 300
+_FAILED: dict[str, float] = {}
 
 # Streamlit serves each session on its own thread, and a psycopg connection
 # must not run two statements at once. Reads are small and cached, so one
@@ -81,25 +113,41 @@ _LOCK = threading.Lock()
 
 
 def _run(sql: str, params: tuple[Any, ...] = ()) -> list[tuple[Any, ...]]:
-    """Run a statement, reconnecting once if the cached connection went away."""
+    """Run a statement, reconnecting once if an established connection dropped.
+
+    A failure to LOG IN is not retried: it is recorded, shown to the viewer as
+    unavailable, and no further attempt is made for LOGIN_BACKOFF seconds.
+    """
+    failed_at = _FAILED.get("at")
+    if failed_at is not None and time.monotonic() - failed_at < LOGIN_BACKOFF:
+        unavailable(RuntimeError("login backoff after a failed connection"))
     for attempt in (1, 2):
         try:
-            with _LOCK, _connection().cursor() as cur:
+            conn = _connection()
+        except psycopg.Error as err:
+            _FAILED["at"] = time.monotonic()
+            unavailable(err)
+        _FAILED.pop("at", None)
+        try:
+            with _LOCK, conn.cursor() as cur:
                 cur.execute(sql, params)
                 return cur.fetchall() if cur.description else []
-        except psycopg.OperationalError:
+        except psycopg.OperationalError as err:
+            # The connection was established and has since dropped: one retry
+            # on a fresh one, then give up.
             _connection.clear()
             if attempt == 2:
-                raise
+                unavailable(err)
     return []
 
 
 def unavailable(err: Exception) -> None:
     st.error(
-        "The dashboard cannot reach its data right now. The pipeline publishes to a "
-        "serving database; it may be restarting. Try again in a minute."
+        "The dashboard cannot reach its data right now. It will try again in a few "
+        "minutes."
     )
-    print(f"serving database error: {err}")
+    # The full error goes to the app's log for the owner, not onto a public page.
+    print(f"serving database error: {err}", file=sys.stderr)
     st.stop()
 
 
