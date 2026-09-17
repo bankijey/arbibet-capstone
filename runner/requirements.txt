@@ -10,3 +10,5 @@ numpy==2.1.2
 openai==3.6.0
 httpx==0.28.1
 python-dotenv==1.2.3
+# Spark hands results to pandas through Arrow; without it the fallback is slow.
+pyarrow==21.0.0

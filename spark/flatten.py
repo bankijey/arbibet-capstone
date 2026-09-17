@@ -170,6 +170,8 @@ def session() -> SparkSession:
         # Fetched at session start rather than vendored: one Maven coordinate
         # is easier to audit than a jar of unknown provenance in the repo.
         .config("spark.jars.packages", "org.postgresql:postgresql:42.7.4")
+        # The runner logs to a file; a redrawn progress bar is megabytes of noise.
+        .config("spark.ui.showConsoleProgress", "false")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         .getOrCreate()
     )
