@@ -27,9 +27,14 @@ DEEP_DIVE_PAST = 20
 # top `%(past)d` already started.
 POPULAR_FIXTURES = """
     WITH leg AS (
-        SELECT s.share_code, l.value ->> '$.event.eventId' AS sr_match_id
+        -- Only the fixture id of each leg, as a typed struct: casting the leg
+        -- array to JSON[] parsed every field of every leg and ran the runner's
+        -- DuckDB out of memory (see stg_slip_leg).
+        SELECT s.share_code, l.leg.event.eventId AS sr_match_id
         FROM CORE.bronze_slip_payload_latest s,
-             unnest(cast(s.payload -> '$.bettableBetSlip' AS json[])) AS l(value)
+             unnest(json_transform(
+                 s.payload -> '$.bettableBetSlip', '[{"event": {"eventId": "VARCHAR"}}]'
+             )) AS l(leg)
     )
     SELECT f.event_id,
            coalesce(f.kickoff_at > current_timestamp, FALSE) AS upcoming
