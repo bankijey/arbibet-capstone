@@ -85,8 +85,10 @@ def test_names_check_finds_the_merged_event():
 
 
 class _Client:
-    def __init__(self, answer: dict, fail: bool = False):
+    def __init__(self, answer: dict, fail: bool = False, second: dict | None = None):
         self.answer, self.fail, self.calls = answer, fail, 0
+        self.second = second  # what the escalation model answers, if asked
+        self.models: list[str] = []
 
     @property
     def chat(self):
@@ -98,10 +100,12 @@ class _Client:
 
     def create(self, **kw):
         self.calls += 1
+        self.models.append(kw.get("model"))
         if self.fail:
             raise RuntimeError("down")
+        answer = self.second if (self.second is not None and self.calls > 1) else self.answer
         return SimpleNamespace(
-            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(self.answer)))]
+            choices=[SimpleNamespace(message=SimpleNamespace(content=json.dumps(answer)))]
         )
 
 
@@ -114,7 +118,7 @@ def test_model_is_asked_once_for_the_ambiguous_books_only():
     client = _Client(
         {"books": {"ilotbet": {"same_match": False, "reason": "Atletico is another club"}}}
     )
-    result = verify.verify(fixture, payloads, client)
+    result = verify.verify(fixture, payloads, client, escalate=None)
     assert client.calls == 1
     assert result.checks["ilotbet"].verdict == "mismatch"
     assert result.checks["ilotbet"].method == "model"
@@ -122,12 +126,35 @@ def test_model_is_asked_once_for_the_ambiguous_books_only():
     # livescorebet mismatched by names alone; the model was not asked about it.
     assert result.checks["livescorebet"].verdict == "mismatch"
     # Known verdicts are reused while the book names the same teams.
-    again = verify.verify(fixture, payloads, client, known=result.checks)
+    again = verify.verify(fixture, payloads, client, known=result.checks, escalate=None)
     assert client.calls == 1 and again.checks["ilotbet"].verdict == "mismatch"
     # The model failing leaves the book unverified, not ok.
     down = verify.verify(fixture, payloads, _Client({}, fail=True))
     assert down.checks["ilotbet"].verdict == "unverified"
     assert verify.verify(fixture, payloads, None).checks["ilotbet"].verdict == "unverified"
+
+
+def test_a_mismatch_from_the_small_model_needs_the_larger_models_confirmation():
+    payloads = {"msport": json.dumps({"data": {"homeTeam": "We SC", "awayTeam": "El Seka"}})}
+    fixture = {"home": "Itesalat", "away": "El Seka El Hadid"}
+    small_no = {"books": {"msport": {"same_match": False, "reason": "different club"}}}
+    large_yes = {
+        "books": {"msport": {"same_match": True, "reason": "We SC is Itesalat's new name"}}
+    }
+    client = _Client(small_no, second=large_yes)
+    result = verify.verify(fixture, payloads, client, model="small", escalate="large")
+    assert client.models == ["small", "large"]
+    assert result.checks["msport"].verdict == "ok"
+    assert "new name" in result.checks["msport"].explanation
+    # Both say different: excluded, with the larger model's reason.
+    large_no = {"books": {"msport": {"same_match": False, "reason": "another club entirely"}}}
+    result = verify.verify(fixture, payloads, _Client(small_no, second=large_no), escalate="large")
+    assert result.checks["msport"].verdict == "mismatch"
+    assert "another club" in result.checks["msport"].explanation
+    # A "same match" from the small model is not escalated.
+    yes = _Client({"books": {"msport": {"same_match": True, "reason": "alias"}}}, second=large_no)
+    assert verify.verify(fixture, payloads, yes, escalate="large").checks["msport"].verdict == "ok"
+    assert yes.calls == 1
 
 
 def test_row_shape():

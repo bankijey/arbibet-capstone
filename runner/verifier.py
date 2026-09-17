@@ -40,6 +40,9 @@ class FixtureVerifier:
         self.on_mismatch = on_mismatch
         self.client: Any = None
         self.model = os.environ.get("VERIFY_MODEL", verify.MODEL)
+        self.escalate: str | None = (
+            os.environ.get("VERIFY_ESCALATE_MODEL", verify.ESCALATE_MODEL) or None
+        )
         if os.environ.get("OPENAI_KEY") and os.environ.get("VERIFY_WITH_MODEL", "1") == "1":
             from openai import OpenAI
 
@@ -115,7 +118,7 @@ class FixtureVerifier:
             # (betking, ...) that no parser reads and no signal uses.
             raw = {b: p.payload for b, p in payloads.items() if b in PARSER_REGISTRY}
             before = sum(1 for c in known.values() if c.method == "model")
-            result = verify.verify(info, raw, self.client, known, self.model)
+            result = verify.verify(info, raw, self.client, known, self.model, self.escalate)
             self.stats["checked"] += 1
             self.stats["model_calls"] += max(
                 0, sum(1 for c in result.checks.values() if c.method == "model") - before

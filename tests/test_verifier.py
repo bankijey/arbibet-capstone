@@ -185,6 +185,7 @@ def test_the_model_settles_a_partial_match_once(wh):
     }
     verifier = FixtureVerifier(wh)
     verifier.client = _Client(same=False)
+    verifier.escalate = None  # the confirmation step is tested in test_verify
     accepted, result = verifier.check(fixture, payloads)
     assert accepted == {} and result.checks["msport"].method == "model"
     assert verifier.client.calls == 1

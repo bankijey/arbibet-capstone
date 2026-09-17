@@ -46,7 +46,13 @@ log = logging.getLogger("arbibet_capstone.verify")
 MODEL = "gpt-4o-mini"
 # Bumped whenever the prompt or the rules change: cached model verdicts from an
 # older version are asked again rather than trusted.
-PROMPT_VERSION = "v2"
+PROMPT_VERSION = "v3"
+# A mismatch the small model finds is confirmed by this one before it excludes
+# anything: club aliases and rebrands (We SC for Itesalat, Serik Belediyespor
+# for Serik Spor) are where the small model errs, and a false exclusion costs a
+# signal. A merged event fails both. Only the confirmations cost the larger
+# model's price, a handful per cycle.
+ESCALATE_MODEL = "gpt-4o"
 
 # Tokens that say nothing about which club it is.
 _NOISE = {
@@ -328,6 +334,7 @@ def verify(
     client: Any | None,
     known: Mapping[str, Check] | None = None,
     model: str = MODEL,
+    escalate: str | None = ESCALATE_MODEL,
 ) -> Result:
     """The whole check for one fixture.
 
@@ -370,9 +377,14 @@ def verify(
             if b not in pending and c.home and c.away
         }
         try:
-            result.checks.update(
-                by_model(client, fixture, pending, model, context)  # type: ignore[arg-type]
-            )
+            first = by_model(client, fixture, pending, model, context)  # type: ignore[arg-type]
+            doubted = {b: pending[b] for b, c in first.items() if c.verdict == "mismatch"}
+            if doubted and escalate:
+                second = by_model(client, fixture, doubted, escalate, context)
+                for book, check in second.items():
+                    # The stronger model's word stands either way; its reason is kept.
+                    first[book] = check
+            result.checks.update(first)
         except Exception as err:
             log.warning("model check failed for %s: %s", fixture.get("home"), err)
     return consensus(result)
