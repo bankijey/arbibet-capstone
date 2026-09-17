@@ -37,6 +37,7 @@ from arbibet_capstone.crosswalk.mappings import market_mappings
 from arbibet_capstone.env import load as load_env
 from arbibet_capstone.fixtures import Fixture
 from arbibet_capstone.signals import MAX_LEG_SPREAD_SECONDS
+from arbibet_capstone.verify import mismatched_books
 from arbibet_capstone.warehouse import connect, merge_bulk
 
 load_env()
@@ -103,6 +104,8 @@ def main() -> int:
         for e, m, t, a, spread in cur.fetchall():
             stored[_key(str(e), str(m))].append((t, a, spread))
         positions = cursor.read(warehouse, CURSOR_SCOPE)
+        # See odds/ticks.py: a wrong book's payloads are not this fixture's.
+        excluded = mismatched_books(warehouse)
 
     log.info("fixtures=%d markets=%d", len(tracked), sum(len(m) for m in tracked.values()))
     mappings = market_mappings()
@@ -113,25 +116,26 @@ def main() -> int:
     with bronze.connect() as source:
         for event_id, markets in sorted(tracked.items()):
             known = [positions.get(_key(event_id, m)) for m in markets]
-            resume = (
-                None if any(p is None for p in known) else min(p for p in known if p) - OVERLAP
-            )
+            resume = None if any(p is None for p in known) else min(p for p in known if p) - OVERLAP
             fixture = Fixture(
                 UUID(event_id), kickoff[event_id], None, None, None, None, None, None, None
             )
             history = bronze.payload_history(
                 source, UUID(event_id), since=resume, until=kickoff[event_id]
             )
+            if event_id in excluded:
+                history = [h for h in history if h.bookmaker not in excluded[event_id]]
             if not history:
                 continue
+            seeds = bronze.payloads_as_of(source, UUID(event_id), resume) if resume else ()
+            if event_id in excluded:
+                seeds = [h for h in seeds if h.bookmaker not in excluded[event_id]]
             track = replay(
                 fixture,
                 history,
                 markets,
                 mappings,
-                seed_payloads=(
-                    bronze.payloads_as_of(source, UUID(event_id), resume) if resume else ()
-                ),
+                seed_payloads=seeds,
                 seed_state=(
                     {
                         m: state
@@ -159,7 +163,10 @@ def main() -> int:
                     advanced[_key(event_id, m)] = track.last_fire_time
             log.info(
                 "%s payloads=%d points=%d%s",
-                event_id, len(history), len(track.points), "" if resume else " (full replay)",
+                event_id,
+                len(history),
+                len(track.points),
+                "" if resume else " (full replay)",
             )
 
     with connect() as warehouse:

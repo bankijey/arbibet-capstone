@@ -26,17 +26,40 @@ from arbibet_capstone.fixtures import Fixture
 # set with a comment rather than a rule rediscovered in three places.
 ARB_RELEVANT_MARKETS = frozenset(
     {
-        1, 60, 83,                              # 1X2, by period
-        10, 63, 85,                             # double chance, by period
-        11, 64, 86,                             # draw-no-bet, by period
-        13,                                     # away-no-bet
-        14,                                     # handicap
-        16,                                     # asian handicap
-        18, 68, 90, 177,                        # over/under, by period + corners
-        29, 31, 32, 34, 49, 51, 57, 75, 95,     # yes/no families (BTTS, clean sheet, ...)
-        35, 78, 543,                            # 1X2 & BTTS combinations
-        37, 79, 544,                            # 1X2 & over/under combinations
-        542, 545, 546,                          # double chance & BTTS combinations
+        1,
+        60,
+        83,  # 1X2, by period
+        10,
+        63,
+        85,  # double chance, by period
+        11,
+        64,
+        86,  # draw-no-bet, by period
+        13,  # away-no-bet
+        14,  # handicap
+        16,  # asian handicap
+        18,
+        68,
+        90,
+        177,  # over/under, by period + corners
+        29,
+        31,
+        32,
+        34,
+        49,
+        51,
+        57,
+        75,
+        95,  # yes/no families (BTTS, clean sheet, ...)
+        35,
+        78,
+        543,  # 1X2 & BTTS combinations
+        37,
+        79,
+        544,  # 1X2 & over/under combinations
+        542,
+        545,
+        546,  # double chance & BTTS combinations
     }
 )
 

@@ -35,4 +35,14 @@ select
     detected_at,                        -- market time (= newest_leg_fire_time)
     consumed_at                         -- when a consumer processed it
 
-from {{ source('core', 'fact_arbitrage_signal') }}
+from {{ source('core', 'fact_arbitrage_signal') }} s
+-- A signal with a leg from a book found pricing a different match under this
+-- event id is not a signal (arbibet_capstone.verify; core.fixture_check).
+where not exists (
+    select 1
+    from unnest(cast(s.legs as json[])) as leg(value)
+    join {{ source('core', 'fixture_check') }} c
+      on c.event_id = s.event_id
+     and c.bookmaker_name = leg.value ->> '$.bookmaker'
+     and c.verdict = 'mismatch'
+)

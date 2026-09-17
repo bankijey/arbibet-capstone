@@ -93,7 +93,9 @@ def main() -> int:
         written = append_slips(warehouse, changed) if changed else 0
     log.info(
         "slips fetched=%d unchanged=%d merged=%d",
-        len(rows), len(rows) - len(changed), written,
+        len(rows),
+        len(rows) - len(changed),
+        written,
     )
     return 0
 

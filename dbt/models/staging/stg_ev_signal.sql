@@ -35,3 +35,10 @@ select
 
 from {{ source('core', 'fact_ev_signal') }} e
 join {{ source('core', 'dim_bookmaker') }} b using (bookmaker_id)
+-- A book found pricing a different match under this event id is not a signal
+-- (arbibet_capstone.verify; core.fixture_check).
+where not exists (
+    select 1 from {{ source('core', 'fixture_check') }} c
+    where c.event_id = e.event_id and c.bookmaker_name = b.bookmaker_name
+      and c.verdict = 'mismatch'
+)

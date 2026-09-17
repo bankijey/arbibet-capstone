@@ -128,9 +128,7 @@ def list_codes(client: httpx.Client, settings: Settings) -> list[SlipRef]:
 
 def fetch_slip(client: httpx.Client, share_code: str, settings: Settings) -> dict[str, Any]:
     """The detail payload for one share code, verbatim."""
-    response = client.get(
-        _DETAIL_URL.format(code=share_code), timeout=settings.timeout_seconds
-    )
+    response = client.get(_DETAIL_URL.format(code=share_code), timeout=settings.timeout_seconds)
     response.raise_for_status()
     return dict(response.json().get("data") or {})
 

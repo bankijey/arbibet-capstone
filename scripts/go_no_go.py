@@ -26,10 +26,7 @@ for book, body in payloads.items():
     for m in markets:
         books_by_market[m.market_id].add(book)
 
-shared = {
-    mid: bks for mid, bks in books_by_market.items()
-    if bks & BETRADAR and bks & DIALECT
-}
+shared = {mid: bks for mid, bks in books_by_market.items() if bks & BETRADAR and bks & DIALECT}
 print(f"\nmarkets shared between a betradar book and a dialect book: {len(shared)}")
 for mid, bks in sorted(shared.items())[:10]:
     print(f"  marketId {mid:<12} {sorted(bks)}")

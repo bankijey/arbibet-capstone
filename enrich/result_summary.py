@@ -213,11 +213,11 @@ def _thin(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for family_rows in by_family.values():
         seen: set[str] = set()
         picked = []
-        for r in family_rows:              # one of each verdict, in rank order
+        for r in family_rows:  # one of each verdict, in rank order
             if r["VERDICT"] not in seen:
                 seen.add(r["VERDICT"])
                 picked.append(r)
-        for r in family_rows:              # then fill the remaining slots
+        for r in family_rows:  # then fill the remaining slots
             if len(picked) >= _PER_FAMILY:
                 break
             if r not in picked:

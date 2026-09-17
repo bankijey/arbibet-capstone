@@ -93,6 +93,27 @@ class TelegramService:
         self.alerter.callbacks = self.bot.callbacks
         self.started_at = datetime.now(UTC)
 
+    # The verifier's hook: a book found pricing a different match.
+    def mismatch(self, fixture: Any, check: Any) -> None:
+        owner = self.bot.owner
+        if owner is None:
+            return
+        from runner.telegram import render
+
+        text = (
+            f"\u26a0\ufe0f <b>Book excluded</b>\n<b>{render.e(fixture.home_team)} v "
+            f"{render.e(fixture.away_team)}</b> · kick-off {render.when(fixture.kickoff)}\n"
+            f"<b>{render.e(check.bookmaker)}</b> lists {render.e(check.home)} v "
+            f"{render.e(check.away)} under this fixture ({render.e(check.method)}): "
+            f"{render.e(check.explanation)}\n\nIts signals for this fixture are removed. "
+            "If you placed a leg at that book, it is a bet on the other match."
+        )
+        try:
+            self.api.send(owner, text)
+            self.stats["mismatch_notices"] = self.stats.get("mismatch_notices", 0) + 1
+        except Exception:
+            log.warning("could not notify the owner of a mismatch", exc_info=True)
+
     # The hot loop's hook.
     def submit(
         self,

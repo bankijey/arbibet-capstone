@@ -112,7 +112,9 @@ def main() -> int:
             if event_id in slip_events and STATE_BOOK in payloads:
                 state = _event_state(payloads[STATE_BOOK].payload)
                 if state and stored_state.get(event_id) != (
-                    state["match_status"], state["score"], state["played_time"]
+                    state["match_status"],
+                    state["score"],
+                    state["played_time"],
                 ):
                     states.append(
                         {
@@ -176,7 +178,10 @@ def main() -> int:
         )
     log.info(
         "slip fixtures=%d signal legs=%d states written=%d legs written=%d (withdrawn now=%d)",
-        len(slip_events), sum(len(v) for v in legs.values()), n_states, n_legs,
+        len(slip_events),
+        sum(len(v) for v in legs.values()),
+        n_states,
+        n_legs,
         sum(1 for r in availability if not r["offered"]),
     )
     return 0

@@ -114,9 +114,7 @@ def price_changes(
         yield_to_hot()
 
         try:
-            markets = parse_bookmaker(
-                record.bookmaker, json.loads(record.payload), mappings
-            )
+            markets = parse_bookmaker(record.bookmaker, json.loads(record.payload), mappings)
         except Exception:
             failed += 1
             continue

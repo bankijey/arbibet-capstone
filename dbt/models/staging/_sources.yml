@@ -9,6 +9,7 @@ sources:
       dimensions. dbt reads them through this source and never owns them.
     tables:
       - name: fact_arbitrage_signal
+      - name: fixture_check
       - name: fact_ev_signal
       - name: fact_odds_tick
       - name: fact_team_match

@@ -84,7 +84,7 @@ class MarketOutcome(NamedTuple):
 class DetectedSignal(NamedTuple):
     """An opportunity the platform flagged before this match started."""
 
-    kind: str            # "arbitrage" or "positive EV"
+    kind: str  # "arbitrage" or "positive EV"
     market: str
     detail: str
 
@@ -121,9 +121,7 @@ def build_prompt(brief: ResultBrief) -> list[dict[str, str]]:
         *(_market_line(m) for m in brief.markets),
     ]
     if brief.signals:
-        lines += [
-            f"- signal | {s.kind} | {s.market} | {s.detail}" for s in brief.signals
-        ]
+        lines += [f"- signal | {s.kind} | {s.market} | {s.detail}" for s in brief.signals]
     elif brief.markets:
         # Printed, not merely absent. The first version left the signal section
         # empty and trusted the model to notice nothing was there; it wrote "a

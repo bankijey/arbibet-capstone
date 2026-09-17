@@ -57,9 +57,7 @@ GOAL_LINES = (0.5, 1.5, 2.5, 3.5, 4.5)
 #
 # Widening is changing these two tuples. The engine already handles the rest.
 FORM_FAMILIES = tuple(
-    os.environ.get(
-        "SETTLE_FAMILIES", "1x2,double_chance,btts,total_goals,draw_no_bet"
-    ).split(",")
+    os.environ.get("SETTLE_FAMILIES", "1x2,double_chance,btts,total_goals,draw_no_bet").split(",")
 )
 FORM_PERIODS = tuple(os.environ.get("SETTLE_PERIODS", "match").split(","))
 
@@ -80,6 +78,7 @@ LINES_BY_FAMILY: dict[str, tuple[str, ...]] = {
 def _lines(family: str) -> tuple[str, ...]:
     explicit = LINES_BY_FAMILY.get(family)
     return explicit if explicit else tuple(f"{line:g}" for line in GOAL_LINES)
+
 
 # API-Football's status codes to the engine's own vocabulary. An explicit map
 # rather than `.lower()`: the two agreeing in case is a coincidence for these
@@ -124,14 +123,17 @@ def catalogue() -> list[tuple[str, str, str, str, str]]:
         for side in sorted(set(family.sides.values())):
             if family.line_keys:
                 entries.extend(
-                    (market_id, mapping.market_family, mapping.period, basis,
-                     f"{side}{LINE_SEPARATOR}{line}")
+                    (
+                        market_id,
+                        mapping.market_family,
+                        mapping.period,
+                        basis,
+                        f"{side}{LINE_SEPARATOR}{line}",
+                    )
                     for line in _lines(mapping.market_family)
                 )
             else:
-                entries.append(
-                    (market_id, mapping.market_family, mapping.period, basis, side)
-                )
+                entries.append((market_id, mapping.market_family, mapping.period, basis, side))
     return entries
 
 

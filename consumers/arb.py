@@ -29,9 +29,7 @@ load_env()
 # The vendored engine concatenates empty frames on nearly every message. The
 # warning is about a future pandas behaviour change; at one line per message it
 # drowns the log this consumer is meant to be read from.
-warnings.filterwarnings(
-    "ignore", category=FutureWarning, module="arbibet_capstone.crosswalk"
-)
+warnings.filterwarnings("ignore", category=FutureWarning, module="arbibet_capstone.crosswalk")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 # The vendored engine logs a timing line per stage per message. Useful when
@@ -97,7 +95,8 @@ def main() -> int:
                     if time.monotonic() > joined_by:
                         log.error(
                             "no partition assignment after %.0fs -- not an empty "
-                            "topic, a consumer that never joined", join_wait
+                            "topic, a consumer that never joined",
+                            join_wait,
                         )
                         return 1
                     last_message = time.monotonic()
@@ -141,9 +140,7 @@ def main() -> int:
                 except Exception:
                     # Message-level isolation: one bad snapshot must not cost
                     # the run. Logged with its traceback, never swallowed.
-                    log.error(
-                        "message at offset %s failed", message.offset(), exc_info=True
-                    )
+                    log.error("message at offset %s failed", message.offset(), exc_info=True)
                     failed += 1
                     continue
                 consumer.commit(message=message)

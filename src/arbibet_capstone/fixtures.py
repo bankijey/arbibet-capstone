@@ -14,7 +14,7 @@ containment queries this one deliberately does not do.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import NamedTuple
+from typing import Any, NamedTuple
 from uuid import UUID
 
 import psycopg
@@ -54,6 +54,11 @@ class Fixture(NamedTuple):
     # slips name fixtures by sr:match and teams by sr:competitor, neither of
     # which appears anywhere else in this warehouse.
     sr_match_id: str | None
+    # What each of OUR books' listing names as home and away, as the matcher
+    # recorded it: the fallback when a payload names no teams
+    # (arbibet_capstone.verify). Defaulted so callers that build a Fixture by
+    # hand (arbitrage_track) need not know about it.
+    book_names: dict[str, tuple[str, str]] | None = None
 
 
 # The lateral picks the apifootball leg out of the JSONB array; the LEFT JOIN
@@ -80,7 +85,8 @@ _UPCOMING = """
         COALESCE(a.fixture_id, split_part(af.e_id, ';', 2)::bigint),
         a.home_id::bigint,
         a.away_id::bigint,
-        sr.sr_match_id
+        sr.sr_match_id,
+        m.bookmaker_event_ids
     FROM event_matches m
     LEFT JOIN LATERAL (
         SELECT e->>'e_id' AS e_id
@@ -117,7 +123,22 @@ def upcoming(
     """
     with conn.cursor() as cur:
         cur.execute(_UPCOMING, (sport_key, since, until))
-        return [Fixture(*row) for row in cur]
+        return [
+            Fixture(*row[:9], book_names=_book_names(row[9]) if len(row) > 9 else None)
+            for row in cur
+        ]
+
+
+def _book_names(legs: Any) -> dict[str, tuple[str, str]]:
+    """Our books' team names from the matcher's legs, keyed by OUR bookmaker names."""
+    names: dict[str, tuple[str, str]] = {}
+    for leg in legs or []:
+        source = str(leg.get("e_id", "")).split(";", 1)[0]
+        book = _LINK_BOOKS.get(source)
+        home, away = leg.get("home_team"), leg.get("away_team")
+        if book and home and away and book not in names:
+            names[book] = (str(home), str(away))
+    return names
 
 
 # The matcher's source prefixes differ from our bookmaker names for two books.
@@ -151,7 +172,7 @@ _LINKS = """
 
 class EventLink(NamedTuple):
     event_id: UUID
-    bookmaker: str   # our name for the book, e.g. "msport"
+    bookmaker: str  # our name for the book, e.g. "msport"
     url: str
 
 

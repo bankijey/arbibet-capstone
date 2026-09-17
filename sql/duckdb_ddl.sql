@@ -184,6 +184,23 @@ CREATE TABLE IF NOT EXISTS fact_leg_availability (
 
 );
 
+-- Whether each book's payload for a fixture names the fixture's teams
+-- (arbibet_capstone.verify). A `mismatch` book is excluded from every
+-- comparison, signal and publication for that fixture; the explanation is
+-- what the dashboard and the bot show for the removed signal.
+CREATE TABLE IF NOT EXISTS fixture_check (
+    event_id        VARCHAR(36)  NOT NULL,
+    bookmaker_name  VARCHAR      NOT NULL,
+    checked_at      TIMESTAMPTZ  NOT NULL,
+    verdict         VARCHAR      NOT NULL,   -- ok | mismatch | unverified
+    book_home       VARCHAR,
+    book_away       VARCHAR,
+    method          VARCHAR,                 -- names | model | none
+    explanation     VARCHAR,
+    model           VARCHAR
+
+);
+
 -- Legs a viewer flagged from the dashboard as not on the site. Hidden from the
 -- signal tables for as long as `active`; unflagging sets it false, never
 -- deletes, so the record of who-saw-what stays.

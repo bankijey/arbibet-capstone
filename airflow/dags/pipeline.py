@@ -144,7 +144,6 @@ with DAG(
     tags=["capstone", "signals"],
     **_COMMON,  # type: ignore[arg-type]
 ) as signals:
-
     load_dims = _py("load_dims", "snowflake/load_dims.py 7 7")
 
     # Two hours back, six forward. The window is about whether bronze has
@@ -213,7 +212,6 @@ with DAG(
     tags=["capstone", "history"],
     **_COMMON,  # type: ignore[arg-type]
 ) as history:
-
     # Incremental. The full history is a 505 MB scan and roughly eighty
     # minutes; a daily run wants only what the ingestor fetched since
     # yesterday. The backfill is a one-off with this variable unset.
@@ -228,9 +226,7 @@ with DAG(
         env=SPARK_ENV,
         retries=0,
     )
-    flatten.bash_command = (
-        f"FLATTEN_SINCE_DAYS=3 $PIPELINE_PYTHON {PROJECT}/spark/flatten.py"
-    )
+    flatten.bash_command = f"FLATTEN_SINCE_DAYS=3 $PIPELINE_PYTHON {PROJECT}/spark/flatten.py"
 
     settle = _py("settle", "spark/settle.py", retries=0)
 
@@ -243,7 +239,6 @@ with DAG(
         "enrich/summarise.py",
         env={**PY_ENV, "SUMMARISE_SCOPE": "played", "SUMMARISE_LIMIT": "60"},
     )
-
 
     # Rewrites the last three archived days of deep dives, so post-match notes
     # written after a day was first archived still reach the site.

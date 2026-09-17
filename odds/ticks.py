@@ -46,6 +46,7 @@ from arbibet_capstone.crosswalk.mappings import market_mappings
 from arbibet_capstone.deep_dives import popular_fixtures_sql
 from arbibet_capstone.env import load as load_env
 from arbibet_capstone.ticks import price_changes
+from arbibet_capstone.verify import mismatched_books
 from arbibet_capstone.warehouse import bookmaker_ids, connect, merge_bulk
 
 load_env()
@@ -117,6 +118,9 @@ def main() -> int:
             wanted[str(event_id)] |= _DEEP_DIVE_MARKETS
 
         books = bookmaker_ids(warehouse)
+        # Books found pricing a different match under a fixture's id
+        # (core.fixture_check): their prices are not this fixture's history.
+        excluded = mismatched_books(warehouse)
 
         cursors: dict[str, datetime] = {}
         seeds: dict[str, dict[tuple[str, str, str], float]] = defaultdict(dict)
@@ -146,6 +150,8 @@ def main() -> int:
             started = time.monotonic()
             history = bronze.payload_history(source, UUID(event_id), cursors.get(event_id))
             fetch_seconds += time.monotonic() - started
+            if event_id in excluded:
+                history = [h for h in history if h.bookmaker not in excluded[event_id]]
             payloads += len(history)
             megabytes += sum(len(h.payload) for h in history)
             if not history:
@@ -159,9 +165,7 @@ def main() -> int:
                 continue
 
             started = time.monotonic()
-            extraction = price_changes(
-                history, wanted[event_id], mappings, seeds.get(event_id)
-            )
+            extraction = price_changes(history, wanted[event_id], mappings, seeds.get(event_id))
             parse_seconds += time.monotonic() - started
             skipped += extraction.failed_payloads
 
@@ -181,13 +185,18 @@ def main() -> int:
                 )
             log.info(
                 "%s payloads=%d ticks=%d%s",
-                event_id, len(history), len(rows),
+                event_id,
+                len(history),
+                len(rows),
                 "" if full_replay or event_id in cursors else " (first pass)",
             )
 
     log.info(
         "payloads=%d mb=%.0f fetch=%.0fs parse=%.0fs",
-        payloads, megabytes / 1e6, fetch_seconds, parse_seconds,
+        payloads,
+        megabytes / 1e6,
+        fetch_seconds,
+        parse_seconds,
     )
     if not rows:
         log.warning("no ticks extracted")
@@ -202,7 +211,9 @@ def main() -> int:
         )
     log.info(
         "ticks=%d skipped_payloads=%d mode=%s",
-        written, skipped, "full replay" if full_replay else "incremental",
+        written,
+        skipped,
+        "full replay" if full_replay else "incremental",
     )
     return written
 

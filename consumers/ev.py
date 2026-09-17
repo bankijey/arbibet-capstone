@@ -23,9 +23,7 @@ from arbibet_capstone.warehouse import bookmaker_ids, connect, merge
 
 load_env()
 
-warnings.filterwarnings(
-    "ignore", category=FutureWarning, module="arbibet_capstone.crosswalk"
-)
+warnings.filterwarnings("ignore", category=FutureWarning, module="arbibet_capstone.crosswalk")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("arbibet_capstone.crosswalk.arbitrage").setLevel(logging.WARNING)
 log = logging.getLogger("consumer.ev")
@@ -88,7 +86,8 @@ def main() -> int:
                     if time.monotonic() > joined_by:
                         log.error(
                             "no partition assignment after %.0fs -- not an empty "
-                            "topic, a consumer that never joined", join_wait
+                            "topic, a consumer that never joined",
+                            join_wait,
                         )
                         return 1
                     last_message = time.monotonic()
@@ -129,13 +128,9 @@ def main() -> int:
                             {"bookmaker_id": books[book], **row, "consumed_at": consumed_at}
                         )
                     if rows:
-                        written += merge(
-                            warehouse, table=TABLE, rows=rows, key=KEY
-                        )
+                        written += merge(warehouse, table=TABLE, rows=rows, key=KEY)
                 except Exception:
-                    log.error(
-                        "message at offset %s failed", message.offset(), exc_info=True
-                    )
+                    log.error("message at offset %s failed", message.offset(), exc_info=True)
                     failed += 1
                     continue
                 consumer.commit(message=message)

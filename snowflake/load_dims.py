@@ -113,9 +113,7 @@ def main(days_back: float, days_ahead: float) -> None:
     fixture_records = fixture_rows(window)
 
     with connect() as warehouse:
-        n_markets = merge_bulk(
-            warehouse, table="dim_market", rows=markets, key=["market_base_id"]
-        )
+        n_markets = merge_bulk(warehouse, table="dim_market", rows=markets, key=["market_base_id"])
         # Everything the matcher enriches a fixture WITH, rather than the
         # fixture's own facts. `apifootball_events` is a rolling window, so a
         # fixture that resolved last week resolves to NULL today -- and a
@@ -176,7 +174,12 @@ def main(days_back: float, days_ahead: float) -> None:
     log.info(
         "dim_market=%d dim_fixture=%d dim_market_outcome=%d team_ids_recovered=%d "
         "links=%d (written=%d)",
-        n_markets, n_fixtures, n_outcomes, n_recovered, len(link_rows), n_links,
+        n_markets,
+        n_fixtures,
+        n_outcomes,
+        n_recovered,
+        len(link_rows),
+        n_links,
     )
 
 

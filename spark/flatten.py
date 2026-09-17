@@ -68,9 +68,7 @@ REQUIRED = (
 # A PARTIAL schema, on purpose. The payload also carries `events`, `lineups`
 # and `players`; naming only what is read keeps the parse cheap and leaves the
 # unread arrays visible as the post-capstone work they are.
-_SCORE = StructType(
-    [StructField("home", IntegerType()), StructField("away", IntegerType())]
-)
+_SCORE = StructType([StructField("home", IntegerType()), StructField("away", IntegerType())])
 _TEAM = StructType([StructField("id", LongType()), StructField("name", StringType())])
 _RESPONSE = StructType(
     [
@@ -80,9 +78,7 @@ _RESPONSE = StructType(
                 [
                     StructField("id", LongType()),
                     StructField("date", StringType()),
-                    StructField(
-                        "status", StructType([StructField("short", StringType())])
-                    ),
+                    StructField("status", StructType([StructField("short", StringType())])),
                 ]
             ),
         ),
@@ -177,9 +173,7 @@ def session() -> SparkSession:
     )
 
 
-def _jdbc(
-    spark: SparkSession, url: str, user: str, password: str, table: str
-) -> DataFrameReader:
+def _jdbc(spark: SparkSession, url: str, user: str, password: str, table: str) -> DataFrameReader:
     return (
         spark.read.format("jdbc")
         .option("url", url)
@@ -264,9 +258,7 @@ def latest_per_fixture(raw: DataFrame) -> DataFrame:
     """
     ranked = raw.withColumn(
         "rn",
-        F.row_number().over(
-            Window.partitionBy("fixture_id").orderBy(F.col("ingested_at").desc())
-        ),
+        F.row_number().over(Window.partitionBy("fixture_id").orderBy(F.col("ingested_at").desc())),
     )
     return ranked.filter(F.col("rn") == 1).drop("rn")
 
@@ -278,9 +270,7 @@ def parse(raw: DataFrame) -> DataFrame:
         .select(F.from_json("payload", _PAYLOAD).alias("p"))
         .select(F.col("p.response")[0].alias("r"))
         .filter(F.col("r.fixture.status.short").isin(*FINISHED))
-        .filter(
-            F.col("r.teams.home.id").isNotNull() & F.col("r.teams.away.id").isNotNull()
-        )
+        .filter(F.col("r.teams.home.id").isNotNull() & F.col("r.teams.away.id").isNotNull())
     )
 
 

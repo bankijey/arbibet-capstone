@@ -65,9 +65,7 @@ load_env()
 # The vendored engine concatenates empty frames on nearly every recompute and
 # logs a timing line per stage; both are noise in a loop. Same suppression the
 # consumers use.
-warnings.filterwarnings(
-    "ignore", category=FutureWarning, module="arbibet_capstone.crosswalk"
-)
+warnings.filterwarnings("ignore", category=FutureWarning, module="arbibet_capstone.crosswalk")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("arbibet_capstone.crosswalk.arbitrage").setLevel(logging.WARNING)
 log = logging.getLogger("watch.signals")
@@ -175,7 +173,8 @@ def main() -> int:
 
     log.info(
         "watching every %.0fs, pre-kickoff fixtures only, arb>=%.2f",
-        poll_seconds, arb_threshold,
+        poll_seconds,
+        arb_threshold,
     )
     try:
         while True:
@@ -208,8 +207,12 @@ def main() -> int:
             for event_id in changed:
                 try:
                     arb, ev = _recompute(
-                        bronze_conn, watched[event_id], mappings,
-                        arb_threshold, ev_min, ev_min_probability,
+                        bronze_conn,
+                        watched[event_id],
+                        mappings,
+                        arb_threshold,
+                        ev_min,
+                        ev_min_probability,
                     )
                 except Exception:
                     # One fixture's bad payload is not the loop's problem, and
@@ -223,7 +226,8 @@ def main() -> int:
             if written:
                 log.info(
                     "wrote %d signal rows from %d changed fixtures",
-                    written, len(changed),
+                    written,
+                    len(changed),
                 )
             time.sleep(poll_seconds)
     except KeyboardInterrupt:

@@ -330,9 +330,7 @@ def merge_bulk(
     frame = frame.drop_duplicates(subset=keys, keep="last")
 
     view = f"_stage_{table}_{threading.get_ident()}"
-    picked = ", ".join(
-        f"CAST({c} AS JSON) AS {c}" if c in as_json else c for c in columns
-    )
+    picked = ", ".join(f"CAST({c} AS JSON) AS {c}" if c in as_json else c for c in columns)
     raw = conn.raw.cursor()
     try:
         raw.execute(f"SET TimeZone = '{TIMEZONE}'")

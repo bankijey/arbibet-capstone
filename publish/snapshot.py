@@ -314,6 +314,18 @@ def signals(wh: Warehouse) -> dict[str, Any]:
         WHERE active
         """
     )
+    excluded = wh.query(
+        """
+        SELECT c.event_id, COALESCE(f.home_team || ' v ' || f.away_team, c.event_id) AS fixture,
+               f.kickoff_at, c.bookmaker_name, c.book_home, c.book_away, c.method,
+               c.explanation, c.checked_at
+        FROM CORE.fixture_check c
+        LEFT JOIN CORE.dim_fixture f ON f.event_id = c.event_id
+        WHERE c.verdict = 'mismatch'
+        ORDER BY c.checked_at DESC
+        LIMIT 200
+        """
+    )
     stale = wh.query(
         """
         SELECT count(*) AS n, max(arbitrage) AS worst
@@ -453,6 +465,22 @@ def signals(wh: Warehouse) -> dict[str, Any]:
             ),
             "tracks": tracks,
             "stale": {"n": int(stale.N), "worst": _clean(stale.WORST)},
+            # Books found pricing a different match under a fixture's id, with
+            # the reason: why a signal that was there is gone.
+            "excluded": _records(
+                excluded,
+                {
+                    "EVENT_ID": "eventId",
+                    "FIXTURE": "fixture",
+                    "KICKOFF_AT": "kickoffAt",
+                    "BOOKMAKER_NAME": "book",
+                    "BOOK_HOME": "bookHome",
+                    "BOOK_AWAY": "bookAway",
+                    "METHOD": "method",
+                    "EXPLANATION": "explanation",
+                    "CHECKED_AT": "checkedAt",
+                },
+            ),
             "efficiency": efficiency,
             "flags": _records(
                 flags,
@@ -521,9 +549,13 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
     wallet = paper_wallet(surebets, ev, now)
     slips = wh.query(
         """
-        SELECT o.share_code, o.followed_times, o.legs, o.won, o.lost, o.combined_odds,
+        SELECT o.share_code, c.followed_times, o.legs, o.won, o.lost, o.combined_odds,
                o.last_kickoff
         FROM ANALYTICS.gold_slip_overview o
+        JOIN (
+            SELECT share_code, max(followed_times) AS followed_times
+            FROM ANALYTICS.gold_slip_leg_history GROUP BY 1
+        ) c USING (share_code)
         WHERE o.last_kickoff < current_timestamp AND o.won + o.lost = o.legs AND o.legs > 0
         """
     )

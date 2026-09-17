@@ -52,8 +52,7 @@ def _signal_key(event_id: str, market_id: str, legs: list[dict[str, Any]]) -> st
     material = "|".join(
         [event_id, market_id]
         + sorted(
-            "{}:{}:{}".format(leg["outcome_id"], leg["bookmaker"], leg["odds"])
-            for leg in legs
+            "{}:{}:{}".format(leg["outcome_id"], leg["bookmaker"], leg["odds"]) for leg in legs
         )
     )
     return hashlib.sha256(material.encode()).hexdigest()
@@ -229,9 +228,7 @@ def ev_rows(
         return []
 
     fire_times = {book: quote.fire_time for book, quote in snapshot.books.items()}
-    outcomes = combine_outcomes(
-        {book: quote.markets for book, quote in snapshot.books.items()}
-    )
+    outcomes = combine_outcomes({book: quote.markets for book, quote in snapshot.books.items()})
     if len(outcomes) == 0:
         return []
 

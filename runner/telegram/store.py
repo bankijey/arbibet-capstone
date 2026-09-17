@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS bot.bet (
     legs             jsonb NOT NULL
 );
 CREATE INDEX IF NOT EXISTS bet_chat ON bot.bet (chat_id, placed_at DESC);
+ALTER TABLE bot.bet ADD COLUMN IF NOT EXISTS note text;
 CREATE INDEX IF NOT EXISTS bet_open ON bot.bet (status, kickoff_at);
 
 CREATE TABLE IF NOT EXISTS bot.report (
@@ -127,7 +128,7 @@ ALERT_RETENTION = timedelta(days=7)
 _SUBSCRIBER_COLUMNS = "chat_id, username, active, surebets, ev, ev_min, stake, muted_until"
 _BET_COLUMNS = (
     "bet_id, chat_id, mode, kind, opportunity_key, event_id, market_id, fixture, market, "
-    "kickoff_at, placed_at, source, status, settled_at, profit, legs"
+    "kickoff_at, placed_at, source, status, settled_at, profit, legs, note"
 )
 
 
@@ -395,6 +396,14 @@ class Store:
                 "UPDATE bot.bet SET legs = %s, profit = %s, status = %s, settled_at = now() "
                 "WHERE bet_id = %s",
                 (Jsonb(legs), profit, status, bet_id),
+            )
+        )
+
+    def annotate_bet(self, bet_id: int, status: str, note: str) -> None:
+        self._run(
+            lambda c: c.execute(
+                "UPDATE bot.bet SET status = %s, note = %s WHERE bet_id = %s",
+                (status, note, bet_id),
             )
         )
 

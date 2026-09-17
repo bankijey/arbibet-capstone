@@ -124,7 +124,17 @@ writer. Every job, including dbt and Spark, runs inside it.
 | Cold | Daily 06:00 Berlin | Spark flatten and settle, dbt build and tests, slip compaction, backup, pruning |
 
 Writes are MERGEs on natural keys, so any job can be re-run. Failed jobs are
-recorded and retried on the next cycle. Warm jobs yield to the hot loop while
+recorded and retried on the next cycle.
+
+**Match verification.** The matcher upstream occasionally files two fixtures
+under one event id, which makes two unrelated prices look like a surebet.
+Before any fixture's prices are compared, each book's payload is checked
+against the fixture's teams -- by name, and by gpt-4o-mini when names only
+partly agree (`src/arbibet_capstone/verify.py`). A book found on a different
+match is excluded from that fixture everywhere (hot loop, price history,
+tracking, dbt, publish, Telegram), its signals are removed, the verdict and
+reason are recorded in `core.fixture_check`, the dashboard lists it under
+*Books excluded from fixtures*, and the owner is told on Telegram. Warm jobs yield to the hot loop while
 it recomputes, and the runner reaches the source databases over their Docker
 networks rather than `host.docker.internal` (35× faster for bronze payloads).
 

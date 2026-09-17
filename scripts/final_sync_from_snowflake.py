@@ -85,8 +85,10 @@ def main() -> int:
             for n, t in picked
         )
         staged = f"_sync_{table}"
-        raw.execute(f"CREATE OR REPLACE TEMP TABLE {staged} AS SELECT {select} "
-                    f"FROM core.{table} LIMIT 0")
+        raw.execute(
+            f"CREATE OR REPLACE TEMP TABLE {staged} AS SELECT {select} "
+            f"FROM core.{table} LIMIT 0"
+        )
         for i, batch in enumerate(cur.fetch_pandas_batches()):
             batch.columns = [c.lower() for c in batch.columns]
             raw.register(f"_b{i}", batch)

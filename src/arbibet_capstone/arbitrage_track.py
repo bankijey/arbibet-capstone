@@ -52,8 +52,8 @@ _NO_SPREAD_LIMIT = 10**9
 
 class TrackPoint(NamedTuple):
     market_id: str
-    observed_at: datetime                 # the payload that changed the picture
-    arbitrage: float | None               # None: no cross-book price at this moment
+    observed_at: datetime  # the payload that changed the picture
+    arbitrage: float | None  # None: no cross-book price at this moment
     leg_spread_seconds: int | None
     newest_leg_fire_time: datetime | None
     legs: list[dict[str, Any]] | None
@@ -115,9 +115,7 @@ def replay(
     for record in sorted(seed_payloads, key=lambda r: r.fire_time):
         absorb(record)
 
-    state: dict[str, _State] = {
-        m: _State(a, f) for m, (a, f) in (seed_state or {}).items()
-    }
+    state: dict[str, _State] = {m: _State(a, f) for m, (a, f) in (seed_state or {}).items()}
     points: list[TrackPoint] = []
     last_fire: datetime | None = None
 

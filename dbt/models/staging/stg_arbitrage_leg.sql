@@ -31,6 +31,9 @@ with flattened as (
         (leg.value ->> '$.odds')::double       as odds
     from {{ source('core', 'fact_arbitrage_signal') }} s,
          unnest(cast(s.legs as json[])) as leg(value)
+    -- Whole signals whose any leg is from a mismatched book are dropped, as in
+    -- stg_arbitrage_signal.
+    where s.signal_key in (select signal_key from {{ ref('stg_arbitrage_signal') }})
 )
 
 select

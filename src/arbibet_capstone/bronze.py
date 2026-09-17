@@ -130,9 +130,7 @@ def payload_history(
         return [HistoricPayload(book, payload, fire) for book, payload, fire in cur]
 
 
-def payloads_as_of(
-    conn: psycopg.Connection, event_id: UUID, at: datetime
-) -> list[HistoricPayload]:
+def payloads_as_of(conn: psycopg.Connection, event_id: UUID, at: datetime) -> list[HistoricPayload]:
     """Each book's newest payload for `event_id` at or before `at`."""
     with conn.cursor() as cur:
         cur.execute(_AS_OF, (event_id, at))
@@ -152,9 +150,7 @@ _LATEST_WRITE_TIMES = """
 """
 
 
-def latest_write_times(
-    conn: psycopg.Connection, event_ids: list[UUID]
-) -> dict[UUID, datetime]:
+def latest_write_times(conn: psycopg.Connection, event_ids: list[UUID]) -> dict[UUID, datetime]:
     """The newest `write_time` bronze holds for each of `event_ids`.
 
     How the watcher asks "did anything land for these fixtures since I last

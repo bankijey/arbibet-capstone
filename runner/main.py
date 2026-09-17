@@ -47,6 +47,7 @@ from runner.observe import Observer  # noqa: E402
 from runner.serve import SignalPublisher  # noqa: E402
 from runner.telegram import TelegramService  # noqa: E402
 from runner.telegram import configured as telegram_configured  # noqa: E402
+from runner.verifier import shared as shared_verifier  # noqa: E402
 
 load_env()
 log = logging.getLogger("runner")
@@ -192,8 +193,17 @@ def main() -> int:
             observer.beat("telegram", "error", error="did not start; see runner log")
             telegram = None
     alerts = telegram.submit if telegram else None
+    # Books found pricing a different match under a fixture's id are excluded
+    # before any price is compared; the owner hears about each one.
+    verifier = shared_verifier(warehouse, telegram.mismatch if telegram else None)
     hot = HotLoop(
-        warehouse, observer, listener, stop, on_signals=publisher.request, on_opportunities=alerts
+        warehouse,
+        observer,
+        listener,
+        stop,
+        on_signals=publisher.request,
+        on_opportunities=alerts,
+        verifier=verifier,
     )
     hot.start()
 
@@ -229,6 +239,7 @@ def main() -> int:
                     stop,
                     on_signals=publisher.request,
                     on_opportunities=alerts,
+                    verifier=verifier,
                 )
                 threads["hot"].start()
             stop.wait(30)

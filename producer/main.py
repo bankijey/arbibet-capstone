@@ -83,7 +83,9 @@ def main(hours_back: float, hours_ahead: float) -> int:
     playable = [f for f in window if f.kickoff > now]
     log.info(
         "fixtures in window: %d (pre-kickoff: %d, already started: %d)",
-        len(window), len(playable), len(window) - len(playable),
+        len(window),
+        len(playable),
+        len(window) - len(playable),
     )
     window = playable
 
@@ -111,7 +113,8 @@ def main(hours_back: float, hours_ahead: float) -> int:
             log.warning("cursor unavailable; analysing every fixture", exc_info=True)
             seen = {}
         unchanged = [
-            f for f in window
+            f
+            for f in window
             if f.event_id in newest and seen.get(str(f.event_id)) == newest[f.event_id]
         ]
         fresh = {str(f.event_id): newest[f.event_id] for f in window if f.event_id in newest}
@@ -171,7 +174,10 @@ def main(hours_back: float, hours_ahead: float) -> int:
                 # the exit code still says something went wrong.
                 log.error(
                     "fixture %s (%s v %s) not published: %d bytes",
-                    fixture.event_id, fixture.home_team, fixture.away_team, len(value),
+                    fixture.event_id,
+                    fixture.home_team,
+                    fixture.away_team,
+                    len(value),
                     exc_info=True,
                 )
                 failed += 1

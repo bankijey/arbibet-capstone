@@ -218,6 +218,10 @@ def bet_summary(bet: dict[str, Any]) -> str:
         for leg in legs
     )
     paper = " (paper)" if bet["mode"] == "paper" else ""
+    if bet["status"] not in ("open", "settled"):
+        outcome = e(bet["status"])
+    if bet.get("note"):
+        outcome += f" · <i>{e(bet['note'])}</i>"
     return (
         f"{mark} <b>{e(bet['fixture'])}</b> · {e(bet['market'])}{paper}\n"
         f"   {parts} → {outcome} · {when(bet['kickoff_at'])}"

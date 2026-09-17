@@ -75,6 +75,7 @@ class HotLoop(threading.Thread):
         stop: threading.Event,
         on_signals: Any = None,
         on_opportunities: Any = None,
+        verifier: Any = None,
     ) -> None:
         super().__init__(name="hot", daemon=True)
         self.warehouse = warehouse
@@ -87,6 +88,8 @@ class HotLoop(threading.Thread):
         # wrote the newest payload) after each fixture is stored: the Telegram
         # alerter's hook. Must not block.
         self.on_opportunities = on_opportunities
+        # The match-verification gate (runner/verifier.py); None skips it.
+        self.verifier = verifier
         self.watched: dict[UUID, Fixture] = {}
         self.seen: dict[UUID, datetime] = {}
         self._stats = self._fresh_stats()
@@ -133,6 +136,10 @@ class HotLoop(threading.Thread):
                 continue
             try:
                 payloads = bronze.latest_payloads(bronze_conn, event_id)
+                if self.verifier is not None:
+                    # Only books shown to be pricing THIS fixture are compared
+                    # (runner/verifier.py); a wrong book yields no signal.
+                    payloads, _ = self.verifier.check(fixture, payloads)
                 snapshot = build(fixture, payloads)
                 arb = arbitrage_rows(snapshot, threshold=ARB_THRESHOLD)
                 ev = ev_rows(snapshot, min_ev=EV_MIN, min_probability=EV_MIN_PROBABILITY)

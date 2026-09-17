@@ -58,7 +58,6 @@ def write(conn: Any, scope: str, positions: Mapping[str, datetime]) -> int:
     from arbibet_capstone.warehouse import merge_bulk
 
     rows = [
-        {"scope": scope, "key": key, "position": position}
-        for key, position in positions.items()
+        {"scope": scope, "key": key, "position": position} for key, position in positions.items()
     ]
     return merge_bulk(conn, table=TABLE, rows=rows, key=["scope", "key"])

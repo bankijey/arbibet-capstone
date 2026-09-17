@@ -7,6 +7,8 @@ subprocess would fail on the lock. dbt runs in-process for the same reason.
 
 WARM (every 15 minutes, in order):
     load_dims          fixtures, markets, event links      at most hourly
+    verify_fixtures    every upcoming fixture with a signal: is each book
+                       pricing the fixture it is filed under?
     ingest_slips       msport booking slips                at most every 30 min
     extract_ticks      price history for signalled/slipped fixtures
     track_arbitrage    where each surebet market stands now
@@ -142,6 +144,53 @@ def publish(warehouse: Warehouse, full: bool = False) -> Callable[[Run], None]:
     return job
 
 
+def verify_fixtures(warehouse: Warehouse) -> Callable[[Run], None]:
+    """Check every upcoming fixture that carries a signal (runner/verifier.py).
+
+    The hot loop checks a fixture as it recomputes it; this pass covers the
+    signals batch jobs wrote and fixtures the hot loop has not touched since a
+    verdict could have changed, so nothing reaches the publish unchecked.
+    """
+
+    def job(run: Run) -> None:
+        from datetime import timedelta
+        from uuid import UUID
+
+        from arbibet_capstone import bronze, fixtures
+        from runner.verifier import shared
+
+        verifier = shared(warehouse)
+        now = datetime.now(UTC)
+        signalled = warehouse.query(
+            """
+            SELECT DISTINCT event_id FROM (
+                SELECT event_id FROM core.fact_arbitrage_signal WHERE arbitrage > 1
+                UNION ALL
+                SELECT event_id FROM core.fact_ev_signal
+            )
+            """
+        )
+        wanted = {str(e) for e in signalled.EVENT_ID}
+        checked = mismatched = 0
+        with fixtures.connect() as sources, bronze.connect() as source:
+            window = fixtures.upcoming(
+                sources, since=now - timedelta(hours=1), until=now + timedelta(hours=72)
+            )
+            for fixture in window:
+                if str(fixture.event_id) not in wanted or fixture.kickoff <= now:
+                    continue
+                payloads = bronze.latest_payloads(source, UUID(str(fixture.event_id)))
+                if not payloads:
+                    continue
+                _, result = verifier.check(fixture, payloads)
+                checked += 1
+                mismatched += len(result.mismatched)
+        run.rows_written = checked
+        run.detail |= {"mismatched_books": mismatched, **verifier.stats}
+
+    return job
+
+
 def settle_bets(warehouse: Warehouse) -> Callable[[Run], None]:
     """Settle Telegram subscribers' bets against the warehouse's results."""
 
@@ -216,6 +265,7 @@ class Job:
 def warm_jobs(warehouse: Warehouse) -> list[Job]:
     return [
         Job("load_dims", script("snowflake/load_dims.py", 7.0, 7.0), every=timedelta(hours=1)),
+        Job("verify_fixtures", verify_fixtures(warehouse)),
         Job("ingest_slips", script("slips/ingest.py"), every=timedelta(minutes=30)),
         Job("extract_ticks", script("odds/ticks.py", returns_rows=True)),
         Job("track_arbitrage", script("odds/arbitrage_track.py")),
