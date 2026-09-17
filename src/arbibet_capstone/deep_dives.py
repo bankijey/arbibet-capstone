@@ -26,25 +26,20 @@ DEEP_DIVE_PAST = 20
 # Returns `event_id, upcoming`: the top `%(upcoming)d` still to be played and the
 # top `%(past)d` already started.
 POPULAR_FIXTURES = """
-    WITH newest AS (
-        SELECT * FROM CORE.bronze_slip_payload
-        QUALIFY row_number() OVER (
-            PARTITION BY source, share_code ORDER BY last_fetched_at DESC
-        ) = 1
-    ),
-    leg AS (
-        SELECT s.share_code, l.value:event:eventId::string AS sr_match_id
-        FROM newest s, LATERAL FLATTEN(input => s.payload:bettableBetSlip) l
+    WITH leg AS (
+        SELECT s.share_code, l.value ->> '$.event.eventId' AS sr_match_id
+        FROM CORE.bronze_slip_payload_latest s,
+             unnest(cast(s.payload -> '$.bettableBetSlip' AS json[])) AS l(value)
     )
     SELECT f.event_id,
-           coalesce(f.kickoff_at > current_timestamp(), FALSE) AS upcoming
+           coalesce(f.kickoff_at > current_timestamp, FALSE) AS upcoming
     FROM leg
     JOIN CORE.dim_fixture f ON f.sr_match_id = leg.sr_match_id
     GROUP BY f.event_id, f.kickoff_at
     QUALIFY row_number() OVER (
-        PARTITION BY coalesce(f.kickoff_at > current_timestamp(), FALSE)
+        PARTITION BY coalesce(f.kickoff_at > current_timestamp, FALSE)
         ORDER BY count(DISTINCT leg.share_code) DESC
-    ) <= IFF(coalesce(f.kickoff_at > current_timestamp(), FALSE), %(upcoming)d, %(past)d)
+    ) <= if(coalesce(f.kickoff_at > current_timestamp, FALSE), %(upcoming)d, %(past)d)
 """
 
 

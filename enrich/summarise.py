@@ -83,7 +83,7 @@ _LEGS = """
 # upcoming.
 _UPCOMING = """
     SELECT share_code,
-           max(IFF(kickoff_at > current_timestamp(), 1, 0)) = 1 AS upcoming
+           max(if(kickoff_at > current_timestamp, 1, 0)) = 1 AS upcoming
     FROM ANALYTICS.gold_slip_leg_history
     GROUP BY share_code
 """

@@ -228,7 +228,7 @@ def main() -> None:
                 "goals_for_reg, goals_against_reg, goals_for_et, goals_against_et, "
                 "goals_for_pens, goals_against_pens, goals_for_full, goals_against_full "
                 "FROM fact_team_match WHERE is_home = TRUE "
-                f"AND match_date >= DATEADD(day, -{since_days}, CURRENT_TIMESTAMP())"
+                f"AND match_date >= current_timestamp - INTERVAL {int(since_days)} DAY"
                 + (f" LIMIT {limit}" if limit else "")
             )
             columns = [c[0] for c in cur.description]

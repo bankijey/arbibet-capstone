@@ -50,8 +50,8 @@ STATE_BOOK = "msport"
 _SLIP_FIXTURES = """
     SELECT DISTINCT event_id
     FROM ANALYTICS.gold_slip_leg_history
-    WHERE kickoff_at BETWEEN dateadd(hour, -36, current_timestamp())
-                         AND dateadd(hour, 3, current_timestamp())
+    WHERE kickoff_at BETWEEN current_timestamp - INTERVAL 36 HOUR
+                         AND current_timestamp + INTERVAL 3 HOUR
 """
 
 # Legs to check: every leg ever used by a fresh surebet on a fixture still to
@@ -61,12 +61,12 @@ _SIGNAL_LEGS = f"""
     FROM ANALYTICS.stg_arbitrage_leg l
     JOIN CORE.dim_fixture f ON f.event_id = l.event_id
     WHERE l.arbitrage > 1 AND l.spread_seconds <= {MAX_LEG_SPREAD_SECONDS}
-      AND f.kickoff_at > current_timestamp()
+      AND f.kickoff_at > current_timestamp
     UNION
     SELECT DISTINCT s.event_id, s.market_id, s.outcome_id, s.bookmaker_name
     FROM ANALYTICS.stg_ev_signal s
     JOIN CORE.dim_fixture f ON f.event_id = s.event_id
-    WHERE s.ev > 0 AND s.is_fresh AND f.kickoff_at > current_timestamp()
+    WHERE s.ev > 0 AND s.is_fresh AND f.kickoff_at > current_timestamp
 """
 
 

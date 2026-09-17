@@ -1,4 +1,4 @@
-"""Every 30 minutes: fetch msport booking codes into `bronze_slip_payload`.
+"""Fetch msport booking codes into `bronze_slip_payload`.
 
 Fetch, hash, merge. No parsing -- the payload is stored verbatim and every
 question about it is answered by a dbt model downstream. That split exists
@@ -16,16 +16,13 @@ from datetime import UTC, datetime
 
 from arbibet_capstone.env import load as load_env
 from arbibet_capstone.slips import SOURCE, Settings, fetch_slips, open_client, payload_hash
-from arbibet_capstone.warehouse import connect, merge_bulk
+from arbibet_capstone.warehouse import append_slips, connect
 
 load_env()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("slips.ingest")
 
-TABLE = "bronze_slip_payload"
-KEY = ["source", "share_code", "payload_hash"]
-JSON_COLUMNS = {"payload"}
 
 # Each slip's NEWEST stored payload, and how many had copied it then.
 #
@@ -92,13 +89,8 @@ def main() -> int:
             if newest.get((r["source"], r["share_code"]))
             != (r["payload_hash"], r["followed_times"])
         ]
-        written = (
-            merge_bulk(
-                warehouse, table=TABLE, rows=changed, key=KEY, json_columns=JSON_COLUMNS
-            )
-            if changed
-            else 0
-        )
+        # Appended to the Parquet lake, not merged: see warehouse.append_slips.
+        written = append_slips(warehouse, changed) if changed else 0
     log.info(
         "slips fetched=%d unchanged=%d merged=%d",
         len(rows), len(rows) - len(changed), written,

@@ -80,11 +80,19 @@ class Cursor:
     def _sql(sql: str, params: Any) -> str:
         return sql.replace("%s", "?") if params is not None else sql
 
+    _DML = re.compile(r"^\s*(UPDATE|DELETE|INSERT|MERGE)", re.IGNORECASE)
+
     def execute(self, sql: str, params: Sequence[Any] | None = None) -> Cursor:
         if params is None:
             self._raw.execute(sql)
         else:
             self._raw.execute(self._sql(sql, params), list(params))
+        # DuckDB returns a DML statement's affected-row count as its one result
+        # row; the Snowflake connector exposed it as `rowcount`.
+        self._rowcount = -1
+        if self._DML.match(sql):
+            counted = self._raw.fetchone()
+            self._rowcount = int(counted[0]) if counted else 0
         return self
 
     def executemany(self, sql: str, params: Sequence[Sequence[Any]]) -> Cursor:
@@ -102,12 +110,16 @@ class Cursor:
 
     @property
     def description(self) -> Any:
-        return self._raw.description
+        # Upper-cased, as Snowflake returned unquoted identifiers: callers
+        # build dicts from these names and read `row["KICKOFF_AT"]`.
+        described = self._raw.description
+        if described is None:
+            return None
+        return [(str(d[0]).upper(), *d[1:]) for d in described]
 
     @property
     def rowcount(self) -> int:
-        # DuckDB reports affected rows as the statement's single result row.
-        return -1
+        return getattr(self, "_rowcount", -1)
 
     def close(self) -> None:
         self._raw.close()

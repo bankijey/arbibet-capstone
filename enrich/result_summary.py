@@ -51,7 +51,7 @@ TABLE = "gold_fixture_result_ai"
 # night's match is worth more than one about a match three weeks ago.
 _FIXTURES = """
     SELECT f.event_id, f.home_team, f.away_team, f.tournament,
-           f.kickoff_at::TIMESTAMP_LTZ AS kickoff_at,
+           f.kickoff_at AS kickoff_at,
            h.goals_for AS goals_home, h.goals_against AS goals_away,
            h.xg AS xg_home, a.xg AS xg_away,
            h.corners AS corners_home, a.corners AS corners_away
@@ -61,7 +61,7 @@ _FIXTURES = """
     LEFT JOIN CORE.fact_team_match a
       ON a.fixture_id = f.apifootball_id AND a.is_home = FALSE
     LEFT JOIN (%s) d ON d.event_id = f.event_id AND NOT d.upcoming
-    WHERE f.kickoff_at < current_timestamp()
+    WHERE f.kickoff_at < current_timestamp
       AND f.event_id NOT IN (SELECT event_id FROM CORE.%s)
     -- Deep-dive fixtures first: each has a page showing its pre-match brief,
     -- and the result note is the other half of it.

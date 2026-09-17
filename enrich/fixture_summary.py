@@ -60,7 +60,7 @@ FORM_WINDOW = 10
 # cannot be acted on at all -- the brief was being written for the reader who
 # had already missed it.
 #
-# `kickoff_at > current_timestamp()` is the load-bearing half. Every signal
+# `kickoff_at > current_timestamp` is the load-bearing half. Every signal
 # this platform found more than a few minutes after kick-off was an artefact
 # of books suspending in-play at different moments (FINDINGS 12b), and a brief
 # about one of those describes a bet that never existed.
@@ -80,7 +80,7 @@ _FIXTURES = """
            f.home_team_id, f.away_team_id
     FROM signalled s
     JOIN CORE.dim_fixture f ON f.event_id = s.event_id
-    WHERE f.kickoff_at > current_timestamp()
+    WHERE f.kickoff_at > current_timestamp
     GROUP BY 1, 2, 3, 4, 5, 6, 7
     ORDER BY coalesce(max(s.best_arb), 0) DESC, f.kickoff_at ASC
     LIMIT %d
@@ -110,8 +110,8 @@ _SIGNALS = """
            NULL                                 AS outcome,
            max(arbitrage)                       AS value,
            max(n_legs)                          AS legs,
-           listagg(DISTINCT 'book ' || b.bookmaker_id, ', ')
-             WITHIN GROUP (ORDER BY 'book ' || b.bookmaker_id) AS books
+           string_agg(DISTINCT 'book ' || b.bookmaker_id, ', '
+             ORDER BY 'book ' || b.bookmaker_id) AS books
     FROM ANALYTICS.stg_arbitrage_leg l
     LEFT JOIN CORE.dim_bookmaker b ON b.bookmaker_name = l.bookmaker_name
     WHERE l.event_id = '%s' AND l.is_surebet
@@ -122,8 +122,8 @@ _SIGNALS = """
            s.outcome_name,
            max(s.ev),
            1,
-           listagg(DISTINCT 'book ' || b.bookmaker_id, ', ')
-             WITHIN GROUP (ORDER BY 'book ' || b.bookmaker_id)
+           string_agg(DISTINCT 'book ' || b.bookmaker_id, ', '
+             ORDER BY 'book ' || b.bookmaker_id)
     FROM ANALYTICS.stg_ev_signal s
     LEFT JOIN CORE.dim_market m ON m.market_base_id = s.market_base_id
     LEFT JOIN CORE.dim_bookmaker b ON b.bookmaker_name = s.bookmaker_name
