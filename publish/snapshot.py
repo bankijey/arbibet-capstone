@@ -545,7 +545,7 @@ def slips(wh: Warehouse) -> dict[str, Any]:
             """
             SELECT count(*) AS n
             FROM ANALYTICS.gold_slip_overview o
-            WHERE o.last_kickoff > current_timestamp()
+            WHERE o.last_kickoff > current_timestamp
               AND o.share_code NOT IN (SELECT share_code FROM CORE.gold_slip_summary_ai)
             """
         ).iloc[0].N
@@ -709,7 +709,7 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
         )
         form = wh.query(
             f"""
-            WITH wanted (team_id, before) AS (SELECT * FROM VALUES {values})
+            WITH wanted (team_id, before) AS (VALUES {values})
             SELECT w.team_id, w.before, m.match_date, m.league_name, m.opponent_name,
                    m.is_home, m.result, m.goals_for, m.goals_against, m.xg, m.xg_against,
                    m.possession, m.corners, m.total_shots, m.shots_on, m.passes_total,
@@ -725,7 +725,7 @@ def dives(wh: Warehouse, event_ids: list[str]) -> dict[str, Any]:
         )
         market_record = wh.query(
             f"""
-            WITH wanted (team_id, before) AS (SELECT * FROM VALUES {values}),
+            WITH wanted (team_id, before) AS (VALUES {values}),
             recent AS (
                 SELECT w.team_id, w.before, r.market_family, r.period, r.side_or_line,
                        r.verdict,

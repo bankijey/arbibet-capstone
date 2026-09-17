@@ -43,6 +43,7 @@ from runner.hot import HotLoop  # noqa: E402
 from runner.jobs import Job, cold_jobs, warm_jobs  # noqa: E402
 from runner.listener import BronzeListener  # noqa: E402
 from runner.observe import Observer  # noqa: E402
+from runner.serve import SignalPublisher  # noqa: E402
 
 load_env()
 log = logging.getLogger("runner")
@@ -141,7 +142,9 @@ def main() -> int:
 
     listener = BronzeListener(os.environ["MARKETS_DB_URL"], observer, stop)
     listener.start()
-    hot = HotLoop(warehouse, observer, listener, stop)
+    publisher = SignalPublisher(warehouse, stop)
+    publisher.start()
+    hot = HotLoop(warehouse, observer, listener, stop, on_signals=publisher.request)
     hot.start()
 
     observer.beat("runner", "started", pid=os.getpid(), started_at=datetime.now(UTC))
@@ -167,7 +170,9 @@ def main() -> int:
             observer.write_status(database_path().parent / "status.json")
             if not threads["hot"].is_alive() and not stop.is_set():
                 log.error("hot loop died; restarting it")
-                threads["hot"] = HotLoop(warehouse, observer, listener, stop)
+                threads["hot"] = HotLoop(
+                    warehouse, observer, listener, stop, on_signals=publisher.request
+                )
                 threads["hot"].start()
             stop.wait(30)
 

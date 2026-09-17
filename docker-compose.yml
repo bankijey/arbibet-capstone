@@ -122,5 +122,34 @@ services:
                  --firstname a --lastname b --role Admin --email a@b.c || true &&
                airflow standalone"
 
+  # The pipeline since the DuckDB move: one always-on process (runner/main.py)
+  # that listens to markets bronze and keeps the warehouse and Supabase fresh.
+  runner:
+    build:
+      context: .
+      dockerfile: runner/Dockerfile
+    image: arbibet-runner:1
+    container_name: arbibet-runner
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # Container-side values override the host ones .env holds, as for Airflow.
+      SOURCES_DB_URL: ${SOURCES_DB_URL_CONTAINER}
+      MARKETS_DB_URL: ${MARKETS_DB_URL_CONTAINER}
+      INGESTOR_DB_URL: ${INGESTOR_DB_URL_CONTAINER}
+      JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
+      PYSPARK_PYTHON: /usr/local/bin/python
+      DUCKDB_PATH: /data/arbibet.duckdb
+      LAKE_PATH: /data/lake
+    volumes:
+      - .:/opt/project
+      - warehouse:/data
+      # Spark downloads the Postgres JDBC driver once; keep it across restarts.
+      - spark_ivy:/root/.ivy2
+    # Time to finish the job in hand and checkpoint DuckDB on `docker stop`.
+    stop_grace_period: 5m
+
 volumes:
   airflow_db_data:
+  warehouse:
+  spark_ivy:

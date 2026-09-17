@@ -111,7 +111,7 @@ def dbt(*args: str) -> Callable[[Run], None]:
     return job
 
 
-def publish(warehouse: Warehouse) -> Callable[[Run], None]:
+def publish(warehouse: Warehouse, full: bool = False) -> Callable[[Run], None]:
     def job(run: Run) -> None:
         from runner import serve
 
@@ -119,7 +119,7 @@ def publish(warehouse: Warehouse) -> Callable[[Run], None]:
             run.skipped = True
             run.detail["reason"] = "SUPABASE_DB_URL not set"
             return
-        run.rows_written = serve.publish(warehouse, run)
+        run.rows_written = serve.publish(warehouse, run, full=full)
 
     return job
 
@@ -214,5 +214,5 @@ def cold_jobs(warehouse: Warehouse, observer: Observer) -> list[Job]:
         Job("compact_slips", compact(warehouse)),
         Job("backup", backup(warehouse)),
         Job("prune_ops", prune(observer)),
-        Job("publish", publish(warehouse)),
+        Job("publish", publish(warehouse, full=True)),
     ]
