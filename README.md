@@ -4,11 +4,16 @@
 
 Reads the append-only bronze layer of an existing multi-bookmaker collection
 platform, normalises five bookmakers' incompatible market schemes into a single
-canonical market/outcome taxonomy, publishes canonical per-fixture price
-snapshots to Kafka, fans out to per-signal consumers writing Snowflake facts,
-transforms with PySpark and dbt into a gold layer, enriches it with
-LLM-generated match summaries through an orchestrated Airflow task, and serves a
-Streamlit dashboard.
+canonical market/outcome taxonomy, and detects cross-book arbitrage and
+positive EV **within seconds of a new price**, woken by Postgres NOTIFY. One
+always-on runner keeps a local **DuckDB** warehouse current (PySpark for match
+history, dbt for the gold layer, OpenAI for grounded summaries) and publishes
+what the dashboard shows to **Supabase**, which a Streamlit dashboard reads --
+including a Pipeline health page in place of the Airflow UI.
+
+The platform ran on Snowflake, Kafka and Airflow first. It moved to DuckDB and
+a runner in September 2026, when the cloud warehouse's metered compute proved
+the wrong fit for 221 MB of data; see [Why DuckDB and Supabase](#why-duckdb-and-supabase).
 
 Built as the capstone for the Ironhack Data Engineering bootcamp (Jul-Sep 2026),
 in a 2.5-day focused sprint. Full plan: [`docs/capstone-plan.md`](docs/capstone-plan.md).
@@ -24,94 +29,64 @@ in a 2.5-day focused sprint. Full plan: [`docs/capstone-plan.md`](docs/capstone-
 ## Architecture
 
 ```mermaid
-flowchart LR
-  subgraph SRC["Sources — read-only"]
+flowchart TB
+  subgraph SRC["Sources -- read-only"]
     bronze[("arbibet-markets bronze<br/>5 books · verbatim BYTEA")]
-    match[("arbibet-matcher<br/>event_matches · apifootball_events")]
-    ingestor[("api-football-ingestor bronze<br/>154k fixtures · nested JSONB")]
-    msport{{"msport booking codes<br/>public share-code API"}}
-    xwalk{{"market crosswalk · 236 rows<br/>+ vendored settlement engine"}}
+    match[("arbibet-matcher<br/>event_matches")]
+    ingestor[("api-football-ingestor<br/>nested match payloads")]
+    msport{{"msport booking codes"}}
   end
 
-  subgraph LIVE["Live odds path"]
-    prod["producer<br/>latest payload per book<br/>· parse · crosswalk"]
-    kraw[["market.ticks<br/>one fixture snapshot per message"]]
-    arb["arbitrage detector"]
-    ev["positive-EV detector"]
+  subgraph RUN["Runner -- one always-on process in Docker"]
+    listener["listener<br/>Postgres LISTEN"]
+    hot["hot loop<br/>surebets and EV in seconds"]
+    warm["warm loop, 15 min<br/>dims · slips · ticks · dbt · AI · publish"]
+    cold["cold loop, daily<br/>Spark flatten + settle · backup"]
   end
 
-  subgraph HIST["History path (batch)"]
-    flat["flatten.py — PySpark<br/>scores + statistics"]
-    settle["settle.py<br/>vendored silver resolvers"]
-    slipin["slips/ingest.py<br/>verbatim, lastId cursor"]
+  subgraph WH["DuckDB warehouse -- local file"]
+    core[("core<br/>dims · signals · ticks · history")]
+    lake[("Parquet lake<br/>slip payloads")]
+    gold[("analytics<br/>dbt staging + gold")]
+    ops[("ops<br/>job_run · heartbeat")]
   end
 
-  subgraph WH["Snowflake"]
-    dims[("dim_fixture · dim_market<br/>dim_bookmaker · dim_market_outcome")]
-    form[("fact_team_match<br/>297,663")]
-    mres[("fact_team_market_result<br/>5,951,520")]
-    slips[("bronze_slip_payload<br/>VARIANT, verbatim")]
-    sig[("fact_arbitrage_signal<br/>fact_ev_signal")]
-    gold[("gold_market_efficiency<br/>gold_slip_leg_history")]
-    aisum[("gold_slip_summary_ai")]
-  end
+  ai["OpenAI gpt-4o-mini<br/>grounded summaries"]
+  sb[("Supabase Postgres<br/>serving documents · deep dives<br/>flags · ops mirror")]
+  st["Streamlit dashboard<br/>signals · slips · pipeline health"]
+  sf[("Snowflake<br/>frozen capstone artifact")]
 
-  subgraph ENR["LLM enrichment"]
-    ai["summarise.py<br/>OpenAI gpt-4o-mini"]
-  end
+  bronze -- "NOTIFY per payload" --> listener --> hot
+  bronze --> hot
+  match --> warm
+  msport --> warm
+  ingestor --> cold
+  hot --> core
+  warm --> core
+  warm --> lake
+  cold --> core
+  core --> gold
+  lake --> gold
+  gold --> ai --> core
+  hot -. heartbeats .-> ops
+  warm -. runs .-> ops
+  gold --> sb
+  ops --> sb
+  sb --> st
+  st -- "viewer flags" --> sb
 
-  st["Streamlit dashboard"]
-
-  subgraph CROSS["Cross-cutting"]
-    af["Airflow — one DAG"]
-    gh["GitHub Actions<br/>ruff · mypy · pytest"]
-  end
-
-  bronze --> prod
-  match --> prod
-  xwalk --> prod
-  prod --> kraw
-  kraw --> arb
-  kraw --> ev
-  arb --> sig
-  ev --> sig
-
-  ingestor --> flat --> form --> settle --> mres
-  xwalk --> settle
-  msport --> slipin --> slips
-  match --> dims
-  xwalk --> dims
-
-  dims --> gold
-  sig --> gold
-  slips --> gold
-  mres -->|"same betradar ids the books price"| gold
-  gold --> ai --> aisum
-  aisum --> st
-  gold --> st
-
-  af -.-> flat
-  af -.-> settle
-  af -.-> gold
-  af -.-> ai
-  gh -.-> prod
-  gh -.-> arb
-
-  classDef topic fill:#fef3c7,stroke:#d97706,color:#78350f
   classDef store fill:#dbeafe,stroke:#2563eb,color:#1e3a8a
   classDef proc fill:#dcfce7,stroke:#16a34a,color:#14532d
-  classDef cross fill:#f3e8ff,stroke:#9333ea,color:#581c87
-  classDef ref fill:#ffe4e6,stroke:#e11d48,color:#881337
-  class kraw topic
-  class bronze,match,ingestor,dims,form,mres,slips,sig,gold,aisum store
-  class prod,arb,ev,flat,settle,slipin,ai,st proc
-  class af,gh cross
-  class msport,xwalk ref
+  classDef cloud fill:#f3e8ff,stroke:#9333ea,color:#581c87
+  classDef old fill:#f1f5f9,stroke:#94a3b8,color:#475569,stroke-dasharray: 4 3
+  class bronze,match,ingestor,core,lake,gold,ops store
+  class listener,hot,warm,cold,ai proc
+  class sb,st cloud
+  class sf old
 ```
 
-**Reading key:** solid arrows = data flow; dashed = cross-cutting concerns.
-Yellow = Kafka topic; blue = data stores; green = processors; pink = reference
-data; purple = orchestration and CI.
+**Reading key:** blue = data stores; green = processes; purple = the free cloud
+tier the public dashboard runs on; grey dashed = kept, no longer written.
 
 ### The problem this platform actually solves
 
@@ -134,18 +109,21 @@ is only meaningful because that reconciliation happened first.
 |---|---|
 | `src/arbibet_capstone/bronze.py` | Reads the latest payload per bookmaker for one fixture |
 | `src/arbibet_capstone/crosswalk/` | **Vendored** parsers, arbitrage engine, and the crosswalk CSV |
-| `producer/` | Bronze to parse to canonical snapshot to Kafka |
-| `consumers/` | `arb.py` and `ev.py`, one signal each, both writing Snowflake facts |
-| `spark/` | PySpark dimension refresh |
-| `dbt/` | Staging and gold models, plus the tests that enforce the schema |
+| `runner/` | **The pipeline**: listener, hot/warm/cold loops, Supabase publisher, observability, Docker image |
+| `sql/` | DuckDB schema, the bronze NOTIFY trigger, the Supabase dashboard role |
+| `src/arbibet_capstone/warehouse.py` | DuckDB connection, idempotent MERGE writers, the Parquet slip lake |
+| `producer/`, `consumers/` | The original Kafka path (Snowflake era); the hot loop replaced it |
 | `slips/ingest.py` | Fetches msport booking codes, stored verbatim |
 | `spark/flatten.py` | Flattens the ingestor's nested match payloads into `fact_team_match` |
 | `spark/settle.py` | Settles historical markets per team via the vendored silver resolvers |
 | `enrich/summarise.py` | LLM verdict per slip, grounded in `gold_slip_leg_history` |
 | `dbt/` | Staging, `gold_market_efficiency`, `gold_slip_leg_history`, 28 tests |
-| `airflow/dags/` | One DAG: dims -> dbt run -> dbt test -> summaries |
-| `dashboard/` | Streamlit app |
-| `snowflake/ddl.sql` | Warehouse schema |
+| `airflow/dags/` | The Snowflake-era DAGs, kept for reference; no longer run |
+| `dashboard/` | Streamlit app, reading Supabase |
+| `publish/snapshot.py` | Builds the serving documents: signals, slips, deep dives |
+| `web/` | A Next.js front end over the same documents, not deployed |
+| `snowflake/` | The Snowflake schema and role, kept as the record of that deployment |
+| `scripts/copy_snowflake_to_duckdb.py` | The migration, verified table by table |
 | `scripts/go_no_go.py` | The gate that proves cross-book resolution works |
 
 ---
@@ -153,58 +131,84 @@ is only meaningful because that reconciliation happened first.
 ## Quickstart
 
 ```bash
-cp .env.example .env          # then fill in the DSNs, Snowflake and OPENAI_KEY
-py -3.12 -m venv .venv        # 3.12: pyspark 4 needs it, 3.14 has no wheels yet
-.venv/Scripts/python.exe -m pip install -e ".[dev,spark]"
-pytest                        # 51 tests, no database required
+cp .env.example .env          # DSNs, OPENAI_KEY, SUPABASE_DB_URL (transaction pooler)
+py -3.12 -m venv .venv
+.venv/Scripts/python.exe -m pip install -e ".[dev,spark]" duckdb dbt-duckdb
+pytest                        # 117 tests; the warehouse ones use a temporary DuckDB
 ```
 
-Then, in order:
+Once per machine:
 
 ```bash
-python snowflake/apply_ddl.py          # schema
-python snowflake/load_dims.py          # dimensions, incl. the betradar maps
-docker compose up -d redpanda          # broker
-python producer/main.py 2 5            # bronze -> market.ticks
-python consumers/arb.py                # -> fact_arbitrage_signal
-python consumers/ev.py                 # -> fact_ev_signal
-cd dbt && dbt run --profiles-dir . && dbt test --profiles-dir .
-python enrich/summarise.py             # -> gold_slip_summary_ai
+python scripts/install_bronze_notify.py   # NOTIFY trigger on markets bronze
+# Supabase SQL editor: run sql/supabase_dashboard_role.sql with your own password
 ```
 
-Signals reach the warehouse two ways. The batch path above (and the daily DAG)
-is the completeness path. For freshness, a long-running **watcher** recomputes
-arbitrage and EV the moment new prices land for an upcoming fixture and pushes
-any opportunity straight to Snowflake — the way the legacy platform worked:
+Then the whole pipeline is one container, which restarts with Docker:
 
 ```bash
-python watch/signals.py                # continuous; pre-kickoff fixtures only
+docker compose up -d --build runner
+docker compose logs -f runner
+docker exec arbibet-runner python -m runner.status
 ```
 
-Both write on `signal_key`, so they converge rather than duplicate. The watcher
-touches Snowflake only when there is a signal to write, polls markets bronze by
-its indexed key, and ignores in-play matches — see FINDINGS 8d.
-
-The history jobs run in the Airflow image rather than on the host, because
-`spark.jars.packages` needs a Hadoop temp dir that Windows cannot provide
-without `winutils.exe`:
+The warehouse lives in the `arbibet-warehouse` Docker volume rather than a bind
+mount: DuckDB's file locking and random I/O are unreliable across the Windows
+file share. One-off cycles for development, against `data/arbibet.duckdb`:
 
 ```bash
-docker run --rm --env-file .env \
-  -e JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64 \
-  -e PYSPARK_PYTHON=/home/airflow/venv/bin/python \
-  -e PYTHONPATH=/opt/project/src \
-  -v "$PWD:/opt/project" -w /opt/project \
-  --entrypoint /bin/bash arbibet-capstone-airflow:2.10.3 \
-  -c '$PIPELINE_PYTHON spark/flatten.py'
+python -m runner.main --warm-once
+python -m runner.main --cold-once
 ```
 
-`JAVA_HOME` and `PYSPARK_PYTHON` must be overridden: `.env` holds host values,
-and passing them into a Linux container stops the JVM from starting at all.
+Only one process may open the DuckDB file for writing, so every job -- dbt and
+Spark included -- runs inside the runner rather than beside it.
+
+## Operations and observability
+
+The Airflow UI is replaced by records the runner keeps itself, published to
+Supabase and shown on the dashboard's **Pipeline health** page:
+
+- **`ops.heartbeat`** -- one row per component (runner, listener, hot, warm,
+  cold), overwritten on every beat. A component whose beat is older than its
+  schedule shows as stale.
+- **`ops.job_run`** -- every job execution: start, end, status, rows, error. The
+  hot loop writes one summary row a minute with its wakes, fixtures recomputed,
+  rows written, and **latency from bronze storing a payload to the signal being
+  stored** -- a median of 2.5-5 s on the first live runs.
+- **Logs** -- `docker compose logs runner`, and rotated files under the volume's
+  `logs/`.
+- **`python -m runner.status`** -- the same picture in a terminal, read from a
+  status file, because a second process cannot open the DuckDB file.
+
+A failed job is recorded and the cycle moves on; the next cycle retries it. A
+dead hot loop is restarted by the supervisor thread. A dropped NOTIFY
+connection reconnects with backoff while the 15-second poll keeps signals
+flowing.
+
+## Why DuckDB and Supabase
+
+| | Snowflake (before) | DuckDB (warehouse now) | Supabase (serving now) |
+|---|---|---|---|
+| Cost | $212 of trial credit in 16 days | $0 | $0, free tier |
+| Size used | 221 MB | 79 MB + 4 MB Parquet | about 17 MB of 500 MB |
+| Role | everything | transformations, history, signals | only what the dashboard reads |
+| Reachable from the cloud dashboard | yes, metered per visit | no, a local file | yes |
+
+The data never needed a cloud warehouse; the bill was compute kept awake by
+frequent small jobs and a polling dashboard. DuckDB does the same SQL locally
+and for free, with `QUALIFY` and JSON support close enough to Snowflake that
+the dbt port was mostly function renames, verified by identical gold row
+counts. Supabase holds only the published documents, so a public dashboard
+costs nothing per visit. Snowflake keeps its data as the record of the
+original deployment; `snowflake/` and the `snowflake-final` git tag are the
+code that ran against it.
 
 ## The dashboard
 
-Live against Snowflake, two pages. Regenerate the images with
+Three pages -- Market signals, Betting slips, Pipeline health -- reading the
+documents the runner publishes to Supabase. The screenshots below were captured
+in the Snowflake era; the pages are the same. Regenerate the images with
 `python docs/capture_screenshots.py` while the app is running -- they are
 scripted rather than hand-captured because every number on the page moves, so a
 hand-framed screenshot silently ages while the README goes on citing it.
@@ -323,9 +327,10 @@ arbitrage/EV engine, and arbibet-silver's 4,874-line settlement engine all
 predate this capstone and belong to the wider Arbibet platform. This repository
 is the pipeline *around* them.
 
-**What is new here.** The bronze-to-Kafka producer, both consumers, the
-warehouse schema, the Spark flatten and settle jobs, the slip ingest, every dbt
-model, the LLM summariser, CI, the Airflow DAG and the dashboard.
+**What is new here.** The bronze-to-Kafka producer and consumers (Snowflake
+era), the runner and its NOTIFY-driven hot loop, both warehouse schemas, the
+Spark flatten and settle jobs, the slip ingest, every dbt model, the LLM
+summarisers, the serving publisher, CI, the DAGs and the dashboard.
 
 **Authorship.** Architecture, specification and verification are the author's;
 much of the implementation was produced through a spec-driven
@@ -351,19 +356,17 @@ Great Expectations are absent by decision. See the roadmap.
 
 | Component | Cost |
 |---|---|
-| Snowflake | $0 -- 30-day trial credit |
-| Redpanda, Spark, Airflow, Postgres | $0 -- local containers |
+| Snowflake | $212 of the $400 trial credit over 16 days, then retired -- see above |
+| DuckDB, Spark, dbt, runner, Postgres | $0, local |
+| Supabase | $0, free tier |
 | Streamlit Community Cloud | $0 |
-| OpenAI `gpt-4o-mini` | **~$0.20** |
-| **Total** | **~$0.20** |
+| OpenAI `gpt-4o-mini` | **about $1** to mid-September 2026 |
 
 Snowflake Cortex was the original plan for the AI layer and would have been
 $0. Cortex AI functions are unavailable on trial accounts -- verified in the
-console, both `COMPLETE` and `SENTIMENT` refuse on account type, and neither a
-different model nor cross-region inference helps. The summariser moved to an
-orchestrated task calling OpenAI, which costs about twenty cents and, as a
-side effect, put the LLM behind a swappable boundary: replacing it with a
-locally-hosted model is now a one-file change.
+console, both `COMPLETE` and `SENTIMENT` refuse on account type. The summariser
+moved to a task calling OpenAI, which put the LLM behind a swappable boundary:
+replacing it with a locally-hosted model is a one-file change.
 
 ## Post-capstone roadmap
 
