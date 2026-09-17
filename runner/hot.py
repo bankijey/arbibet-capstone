@@ -51,9 +51,14 @@ log = logging.getLogger("runner.hot")
 POLL_SECONDS = float(os.environ.get("HOT_POLL_SECONDS", "15"))
 DEBOUNCE_SECONDS = float(os.environ.get("HOT_DEBOUNCE_SECONDS", "1.5"))
 REFRESH_SECONDS = float(os.environ.get("HOT_REFRESH_SECONDS", "300"))
-# Hours ahead to watch. Bronze reprices fixtures close to kick-off; further out
-# they barely move, and a wide window makes the poll's `= ANY(...)` a scan.
-UNTIL_HOURS = float(os.environ.get("HOT_UNTIL_HOURS", "6"))
+# Two horizons. NOTIFY costs nothing to wait on, so notified fixtures are
+# acted on up to three days out -- most payloads bronze writes are for fixtures
+# further than six hours away (measured: 1 of 35 notified fixtures in a 30 s
+# sample was inside six hours). The fallback POLL stays at six hours, where the
+# `= ANY(...)` over the watched ids is served by the index; over three days
+# (~1,100 fixtures) it turns into a scan of the 7M-row table.
+WATCH_HOURS = float(os.environ.get("HOT_WATCH_HOURS", "72"))
+POLL_HOURS = float(os.environ.get("HOT_POLL_HOURS", "6"))
 ARB_THRESHOLD = float(os.environ.get("ARB_RECORD_THRESHOLD", "0.98"))
 EV_MIN = float(os.environ.get("EV_MIN", "0.01"))
 EV_MIN_PROBABILITY = float(os.environ.get("EV_MIN_PROBABILITY", "0.5"))
@@ -90,6 +95,7 @@ class HotLoop(threading.Thread):
             "arbitrage_rows": 0,
             "ev_rows": 0,
             "failures": 0,
+            "notified_ignored": 0,
             "latencies": [],
         }
 
@@ -98,7 +104,7 @@ class HotLoop(threading.Thread):
     def _refresh(self, sources: Any) -> None:
         now = datetime.now(UTC)
         window = fixtures.upcoming(
-            sources, since=now - timedelta(hours=2), until=now + timedelta(hours=UNTIL_HOURS)
+            sources, since=now - timedelta(hours=2), until=now + timedelta(hours=WATCH_HOURS)
         )
         self.watched = {f.event_id: f for f in window if f.kickoff > now}
         self.seen = {e: w for e, w in self.seen.items() if e in self.watched}
@@ -188,7 +194,10 @@ class HotLoop(threading.Thread):
         last_summary = time.monotonic()
         last_poll = 0.0
         primed = False
-        log.info("hot loop: notify + %.0fs poll, next %.0fh of fixtures", POLL_SECONDS, UNTIL_HOURS)
+        log.info(
+            "hot loop: notify for the next %.0fh, %.0fs poll for the next %.0fh",
+            WATCH_HOURS, POLL_SECONDS, POLL_HOURS,
+        )
         try:
             while not self.stop.is_set():
                 try:
@@ -203,13 +212,16 @@ class HotLoop(threading.Thread):
                         time.sleep(DEBOUNCE_SECONDS)
                         ids = self.listener.drain()
                         targets = [UUID(i) for i in ids if UUID(i) in self.watched]
+                        self._stats["notified_ignored"] += len(ids) - len(targets)
                         if targets:
                             self._stats["wakes_notify"] += 1
                             written += self._recompute(bronze_conn, books, targets)
 
                     if time.monotonic() - last_poll >= POLL_SECONDS:
                         last_poll = time.monotonic()
-                        latest = bronze.latest_write_times(bronze_conn, list(self.watched))
+                        horizon = datetime.now(UTC) + timedelta(hours=POLL_HOURS)
+                        polled = [e for e, f in self.watched.items() if f.kickoff <= horizon]
+                        latest = bronze.latest_write_times(bronze_conn, polled)
                         if not primed:
                             # The first poll records the baseline: every priced
                             # fixture would otherwise look changed at start-up.
