@@ -1,19 +1,32 @@
-# Credentials come from the environment, never from this file. It is committed
-# so a clean clone can run dbt; .env is not.
+# Credentials and paths come from the environment, never from this file. It is
+# committed so a clean clone can run dbt; .env is not.
 arbibet_capstone:
-  target: dev
+  target: duckdb
   outputs:
-    dev:
+    # The warehouse since September 2026: a local DuckDB file. In the runner
+    # dbt is invoked in-process, so it shares the runner's open database
+    # rather than fighting it for the file lock.
+    duckdb:
+      type: duckdb
+      path: "{{ env_var('DUCKDB_PATH', '../data/arbibet.duckdb') }}"
+      # dbt writes here; the pipeline's own tables live in core and are read
+      # through sources. Keeping the two apart means a dbt full-refresh can
+      # never drop a table a job writes.
+      schema: analytics
+      threads: 1
+      settings:
+        TimeZone: Europe/Berlin
+
+    # The original deployment, kept so the Snowflake copy can still be built.
+    # Its models are the Snowflake dialect as of the `snowflake-final` tag.
+    snowflake:
       type: snowflake
-      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
-      user: "{{ env_var('SNOWFLAKE_USER') }}"
-      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT', '') }}"
+      user: "{{ env_var('SNOWFLAKE_USER', '') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD', '') }}"
       role: "{{ env_var('SNOWFLAKE_ROLE', 'ACCOUNTADMIN') }}"
       warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE', 'COMPUTE_WH') }}"
       database: "{{ env_var('SNOWFLAKE_DATABASE', 'ARBIBET_CAPSTONE') }}"
-      # dbt writes here; the pipeline's own tables live in CORE and are read
-      # through sources. Keeping the two apart means a dbt full-refresh can
-      # never drop a table a consumer writes.
       schema: ANALYTICS
       threads: 4
       client_session_keep_alive: false

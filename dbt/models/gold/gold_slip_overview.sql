@@ -7,9 +7,9 @@ select
     count(*)                                         as legs,
     min(kickoff_at)                                  as first_kickoff,
     max(kickoff_at)                                  as last_kickoff,
-    sum(iff(resolution in ('won', 'half_win'), 1, 0))   as won,
-    sum(iff(resolution in ('lost', 'half_loss'), 1, 0)) as lost,
+    sum(if(resolution in ('won', 'half_win'), 1, 0))   as won,
+    sum(if(resolution in ('lost', 'half_loss'), 1, 0)) as lost,
     -- Product of every leg's price: exp(sum(ln)), no product aggregate exists.
-    exp(sum(iff(odds > 0, ln(odds), 0)))             as combined_odds
+    exp(sum(if(odds > 0, ln(odds), 0)))             as combined_odds
 from {{ ref('gold_slip_leg_history') }}
 group by share_code

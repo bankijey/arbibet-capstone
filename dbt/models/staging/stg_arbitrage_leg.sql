@@ -1,14 +1,12 @@
 -- One row per LEG of an arbitrage signal, rather than one per signal.
 --
--- `fact_arbitrage_signal.legs` is a VARIANT because legs are only ever read as
+-- `fact_arbitrage_signal.legs` is JSON because legs are only ever read as
 -- a set -- flattening them in the fact would repeat the arbitrage value on
 -- every row. But the dashboard wants to SHOW the set: which book priced which
 -- outcome, at what price, so a reader can see the shape of the opportunity
 -- rather than a single number asserting one existed.
 --
--- It lives here rather than in the dashboard because Snowflake will not allow
--- a comma-lateral FLATTEN on the left of a LEFT JOIN, so the flatten has to be
--- its own scope regardless.
+-- The unnest is its own CTE so the joins below read against plain rows.
 --
 -- `leg_spread_seconds` is the gap between the OLDEST and NEWEST price in the
 -- set -- how far from simultaneous the "snapshot" was. It is surfaced as
@@ -28,11 +26,11 @@ with flattened as (
         s.oldest_leg_fire_time,
         s.newest_leg_fire_time,
         s.detected_at,
-        leg.value:outcome_id::string as outcome_id,
-        leg.value:bookmaker::string  as bookmaker_name,
-        leg.value:odds::float        as odds
+        leg.value ->> '$.outcome_id'           as outcome_id,
+        leg.value ->> '$.bookmaker'            as bookmaker_name,
+        (leg.value ->> '$.odds')::double       as odds
     from {{ source('core', 'fact_arbitrage_signal') }} s,
-         lateral flatten(input => s.legs) leg
+         unnest(cast(s.legs as json[])) as leg(value)
 )
 
 select
@@ -73,7 +71,7 @@ from flattened l
 left join {{ source('core', 'dim_fixture') }} f on f.event_id = l.event_id
 left join {{ source('core', 'dim_market') }} m on m.market_base_id = l.market_base_id
 left join {{ source('core', 'dim_market_outcome') }} o
-       on o.market_id = l.market_base_id::string
+       on o.market_id = l.market_base_id::varchar
       and o.outcome_id = l.outcome_id
 left join {{ ref('stg_outcome_label') }} lab
        on lab.market_id = l.market_id

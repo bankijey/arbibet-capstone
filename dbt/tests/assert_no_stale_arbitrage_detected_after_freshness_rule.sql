@@ -10,4 +10,4 @@
 select signal_key, leg_spread_seconds, consumed_at
 from {{ ref('stg_arbitrage_signal') }}
 where not is_fresh
-  and consumed_at > '2026-09-15 11:30:00 +00:00'::timestamp_tz
+  and consumed_at > '2026-09-15 11:30:00+00:00'::timestamptz

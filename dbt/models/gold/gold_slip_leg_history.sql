@@ -153,7 +153,7 @@ select
 from leg l
 left join {{ source('core', 'fact_team_market_result') }} v
        on v.fixture_id    = l.apifootball_id
-      and v.team_id       = iff(l.primary_team = 'away', l.away_team_id, l.home_team_id)
+      and v.team_id       = if(l.primary_team = 'away', l.away_team_id, l.home_team_id)
       and v.market_family = l.market_family
       and v.period        = l.period
       and v.side_or_line  = l.side_or_line

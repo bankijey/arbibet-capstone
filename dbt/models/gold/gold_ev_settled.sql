@@ -18,7 +18,7 @@ with ev as (
     from {{ ref('stg_ev_signal') }} s
     join {{ source('core', 'dim_fixture') }} f on f.event_id = s.event_id
     where s.detected_at < f.kickoff_at
-      and f.kickoff_at < current_timestamp()
+      and f.kickoff_at < current_timestamp
 )
 
 select
@@ -41,11 +41,11 @@ select
     r.verdict
 from ev
 left join {{ source('core', 'dim_market_outcome') }} o
-       on o.market_id  = ev.market_base_id::string
+       on o.market_id  = ev.market_base_id::varchar
       and o.outcome_id = ev.outcome_id
 left join {{ source('core', 'fact_team_market_result') }} r
        on r.fixture_id    = ev.apifootball_id
-      and r.team_id       = iff(o.primary_team = 'away', ev.away_team_id, ev.home_team_id)
+      and r.team_id       = if(o.primary_team = 'away', ev.away_team_id, ev.home_team_id)
       and r.market_family = o.market_family
       and r.period        = o.period
-      and r.side_or_line  = iff(o.has_line, o.side || '@' || ev.specifier, o.side)
+      and r.side_or_line  = if(o.has_line, o.side || '@' || ev.specifier, o.side)

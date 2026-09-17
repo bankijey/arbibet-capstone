@@ -1,10 +1,19 @@
-"""Connection to the Snowflake warehouse, and the idempotent write.
+"""The local DuckDB warehouse, and the idempotent write.
 
-Every write in this pipeline lands here -- both consumers, both Spark jobs, the
-summariser -- so the connection parameters are read in one place. The three
-credentials are required and have no default; the four placement settings do,
-because a wrong database is a mistake worth catching at connect rather than a
-blank to fill in four .env files.
+Every write in this pipeline lands here, so the connection is made in one
+place. It replaced Snowflake in September 2026: 221 MB of data did not need a
+cloud warehouse, and the metered compute had cost $212 of trial credit in 16
+days (snowflake/ddl.sql stays as the record of that deployment).
+
+ONE PROCESS OWNS THE FILE. DuckDB lets a single process open a database for
+writing. The runner (runner/main.py) is that process, and every job it runs --
+signals, dbt, the Spark jobs, the summaries -- runs inside it and shares the
+connection below. Two scripts opening the file at once fail with a lock error
+rather than corrupting anything, which is the right failure.
+
+The wrapper keeps the calling convention the Snowflake connector had --
+`with connect() as wh`, `wh.cursor()`, `%s` placeholders -- so the jobs did not
+need rewriting to move.
 """
 
 from __future__ import annotations
@@ -12,63 +21,155 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from collections.abc import Collection, Mapping, Sequence
+from pathlib import Path
 from typing import Any
 
+import duckdb
 import pandas as pd
-import snowflake.connector
-from snowflake.connector import SnowflakeConnection
-from snowflake.connector.pandas_tools import write_pandas
 
-from arbibet_capstone.env import require
-
-# Every timestamp in this platform is Europe/Berlin, and this is where that is
-# enforced for Snowflake.
-#
-# Snowflake's session TIMEZONE defaults to America/Los_Angeles, and TIMESTAMP_TZ
-# and TIMESTAMP_LTZ are RENDERED in it. Leaving it at the default did not
-# corrupt a single stored instant -- it made every one of them print nine hours
-# early. Toulouse v Lille, a Ligue 1 evening fixture, displayed as an 11:45
-# kick-off; it is 20:45 in Berlin, which is what markets bronze (a Postgres
-# whose own timezone is Europe/Berlin) meant when it wrote the row.
-#
-# Berlin rather than UTC because bronze is the upstream source of truth for
-# fire_time and it speaks Berlin. Two zones in one pipeline is how a chart's
-# x-axis and its kick-off marker end up in different centuries of an argument.
+# Every timestamp in this platform is Europe/Berlin. Bronze is the upstream
+# source of truth for fire_time and it speaks Berlin; a TIMESTAMPTZ renders in
+# the session zone, so the session is set to it on every connection.
 TIMEZONE = "Europe/Berlin"
 
+ROOT = Path(__file__).resolve().parents[2]
+DDL = ROOT / "sql" / "duckdb_ddl.sql"
+DEFAULT_PATH = ROOT / "data" / "arbibet.duckdb"
+DEFAULT_LAKE = ROOT / "data" / "lake"
 
-def connect() -> SnowflakeConnection:
-    """A session against the capstone's warehouse, in platform time."""
-    return snowflake.connector.connect(
-        account=require("SNOWFLAKE_ACCOUNT"),
-        user=require("SNOWFLAKE_USER"),
-        password=require("SNOWFLAKE_PASSWORD"),
-        role=os.environ.get("SNOWFLAKE_ROLE", "ACCOUNTADMIN"),
-        warehouse=os.environ.get("SNOWFLAKE_WAREHOUSE", "COMPUTE_WH"),
-        database=os.environ.get("SNOWFLAKE_DATABASE", "ARBIBET_CAPSTONE"),
-        schema=os.environ.get("SNOWFLAKE_SCHEMA", "CORE"),
-        session_parameters={"TIMEZONE": TIMEZONE},
-        # For the long-lived callers. A Snowflake session's token expires
-        # after roughly four idle hours, and `watch/signals.py` holds one
-        # connection for its entire run while deliberately going quiet
-        # whenever there is no signal to write -- so it would wake up to
-        # `390114: Authentication token has expired` on the first opportunity
-        # it found all night, which is precisely the moment it must not fail.
-        # The batch jobs finish long before this matters; the heartbeat costs
-        # them nothing.
-        client_session_keep_alive=True,
-    )
+_lock = threading.Lock()
+_database: duckdb.DuckDBPyConnection | None = None
+
+
+def database_path() -> Path:
+    return Path(os.environ.get("DUCKDB_PATH", str(DEFAULT_PATH)))
+
+
+def lake_path() -> Path:
+    return Path(os.environ.get("LAKE_PATH", str(DEFAULT_LAKE)))
+
+
+def _open() -> duckdb.DuckDBPyConnection:
+    global _database
+    with _lock:
+        if _database is None:
+            path = database_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            conn = duckdb.connect(str(path))
+            conn.execute(f"SET TimeZone = '{TIMEZONE}'")
+            conn.execute(DDL.read_text(encoding="utf-8"))
+            _create_lake_views(conn)
+            # Unqualified names resolve the way they did in Snowflake, where
+            # the session schema was CORE.
+            conn.execute("SET search_path = 'core,analytics,ops,main'")
+            _database = conn
+        return _database
+
+
+class Cursor:
+    """A DuckDB cursor that accepts the Snowflake connector's `%s` style."""
+
+    def __init__(self, raw: duckdb.DuckDBPyConnection) -> None:
+        self._raw = raw
+        self._raw.execute(f"SET TimeZone = '{TIMEZONE}'")
+        self._raw.execute("SET search_path = 'core,analytics,ops,main'")
+
+    @staticmethod
+    def _sql(sql: str, params: Any) -> str:
+        return sql.replace("%s", "?") if params is not None else sql
+
+    def execute(self, sql: str, params: Sequence[Any] | None = None) -> Cursor:
+        if params is None:
+            self._raw.execute(sql)
+        else:
+            self._raw.execute(self._sql(sql, params), list(params))
+        return self
+
+    def executemany(self, sql: str, params: Sequence[Sequence[Any]]) -> Cursor:
+        self._raw.executemany(self._sql(sql, params), [list(p) for p in params])
+        return self
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return self._raw.fetchall()
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        return self._raw.fetchone()
+
+    def df(self) -> pd.DataFrame:
+        return self._raw.df()
+
+    @property
+    def description(self) -> Any:
+        return self._raw.description
+
+    @property
+    def rowcount(self) -> int:
+        # DuckDB reports affected rows as the statement's single result row.
+        return -1
+
+    def close(self) -> None:
+        self._raw.close()
+
+    def __iter__(self):
+        return iter(self._raw.fetchall())
+
+    def __enter__(self) -> Cursor:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class Warehouse:
+    """The shared connection, handed out by `connect()`.
+
+    Leaving a `with connect()` block does NOT close it: the process keeps one
+    connection for its life, because reopening a DuckDB file per job would
+    re-run the DDL and, worse, fight any other job still holding it.
+    """
+
+    def __init__(self, raw: duckdb.DuckDBPyConnection) -> None:
+        self.raw = raw
+
+    def cursor(self) -> Cursor:
+        return Cursor(self.raw.cursor())
+
+    def query(self, sql: str, params: Sequence[Any] | None = None) -> pd.DataFrame:
+        """A SELECT as a DataFrame, with UPPERCASE column names.
+
+        Snowflake returned unquoted identifiers in upper case and every caller
+        reads them that way (`row["KICKOFF_AT"]`, `frame.EVENT_ID`). DuckDB
+        keeps the case they were written in, so it is normalised here once.
+        """
+        with self.cursor() as cur:
+            cur.execute(sql, params)
+            frame = cur.df()
+        frame.columns = [str(c).upper() for c in frame.columns]
+        return frame
+
+    def close(self) -> None:
+        """No-op: see the class docstring."""
+
+    def __enter__(self) -> Warehouse:
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        return None
+
+
+def connect() -> Warehouse:
+    """The process's warehouse connection, opened (and schema applied) on first use."""
+    return Warehouse(_open())
 
 
 # --- idempotent writes -------------------------------------------------------
 #
-# Snowflake enforces NOT NULL and nothing else: the PRIMARY KEY declarations in
-# ddl.sql are documentation for readers and hints for the optimiser. So an
-# INSERT would duplicate on every re-run, and the producer is deliberately
-# re-runnable. Every write is a MERGE on a natural key -- the same idempotent
-# convergence arbibet-silver's D4 states: re-running any event, after a crash
-# or a full replay, converges to the same state.
+# No key constraints exist (see sql/duckdb_ddl.sql), so an INSERT would
+# duplicate on every re-run. Every write is a MERGE on a natural key, so
+# re-running any event, after a crash or a full replay, converges to the same
+# state.
 
 _IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -77,9 +178,7 @@ def _identifier(name: str) -> str:
     """Validate a table or column name before it is interpolated into SQL.
 
     These names come from this codebase, never from data, so this is not an
-    injection defence -- it is a typo trap. An identifier that reaches the
-    warehouse malformed produces a Snowflake syntax error a hundred lines from
-    the mistake that caused it.
+    injection defence -- it is a typo trap.
     """
     if not _IDENTIFIER.match(name):
         raise ValueError(f"not a valid SQL identifier: {name!r}")
@@ -94,21 +193,17 @@ def _merge_sql(
 ) -> str:
     """The MERGE statement for one row of `columns` into `table`.
 
-    Key columns are matched on and never updated -- setting a row's identity to
-    itself is noise at best. Columns absent from `columns` are left alone
-    entirely, which is how `detected_at` keeps its original value across a
-    re-run while still defaulting on first insert.
+    Key columns are matched on and never updated. Columns absent from
+    `columns` are left alone entirely, which is how `detected_at` keeps its
+    original value across a re-run while still defaulting on first insert.
     """
     table = _identifier(table)
     cols = [_identifier(c) for c in columns]
     keys = [_identifier(k) for k in key]
     if not set(keys) <= set(cols):
         raise ValueError(f"key {keys} is not a subset of columns {cols}")
-
-    # VARIANT columns need their JSON parsed on the way in; a bare bind would
-    # store the text rather than a queryable object.
     source = ", ".join(
-        f"PARSE_JSON(%s) AS {c}" if c in json_columns else f"%s AS {c}" for c in cols
+        f"CAST(%s AS JSON) AS {c}" if c in json_columns else f"%s AS {c}" for c in cols
     )
     return _merge_into(table, cols, keys, f"(SELECT {source})")
 
@@ -120,48 +215,37 @@ def _merge_into(
     source: str,
     keep: Sequence[str] = (),
 ) -> str:
-    """The MERGE clauses, shared by the row-at-a-time and staged writers.
-
-    They differ only in where the source rows come from -- an inline SELECT of
-    bind parameters, or a staging table -- so the matching, updating and
-    inserting is written once.
+    """The MERGE clauses, shared by the row-at-a-time and bulk writers.
 
     Columns named in `keep` update to `COALESCE(s.c, t.c)`: a NULL arriving
     from the source means "not known on this read", never "known to be
     nothing", so it must not demote a value the warehouse already has.
 
-    This is not hypothetical. `apifootball_events` is a ROLLING WINDOW -- it
-    held fixture ids around 1,635,000 while the fixtures behind live booking
-    slips needed 1,525,921 and 1,550,705, aged out weeks earlier. Those
-    fixtures still carry an `apifootball` leg in the matcher, so the LEFT JOIN
-    still runs and still produces a row; it simply produces NULL team ids. A
+    This is not hypothetical. `apifootball_events` is a ROLLING WINDOW, and a
+    fixture that aged out of it still produced a row -- with NULL team ids. A
     plain `t.c = s.c` wrote those NULLs over ids `dim_fixture` had held since
-    the fixture was fresh, and every slip leg pointing at them lost its
-    settled history. The dashboard was the first thing to show it: six slip
-    cards reading "0 with history" whose summaries, written a day earlier,
-    cited form of 90% and 75%.
-
-    Nothing errored, no test failed, and the row counts were unchanged. The
-    only visible symptom was a number quietly becoming NULL.
+    the fixture was fresh, and every slip leg pointing at them lost its settled
+    history. Nothing errored and the row counts were unchanged.
     """
     on = " AND ".join(f"t.{k} = s.{k}" for k in keys)
     keepers = set(keep)
     updates = ", ".join(
-        f"t.{c} = COALESCE(s.{c}, t.{c})" if c in keepers else f"t.{c} = s.{c}"
+        f"{c} = COALESCE(s.{c}, t.{c})" if c in keepers else f"{c} = s.{c}"
         for c in columns
         if c not in keys
     )
     inserts = ", ".join(columns)
     values = ", ".join(f"s.{c}" for c in columns)
+    matched = f"WHEN MATCHED THEN UPDATE SET {updates} " if updates else ""
     return (
         f"MERGE INTO {table} t USING {source} s ON {on} "
-        f"WHEN MATCHED THEN UPDATE SET {updates} "
+        f"{matched}"
         f"WHEN NOT MATCHED THEN INSERT ({inserts}) VALUES ({values})"
     )
 
 
 def merge(
-    conn: SnowflakeConnection,
+    conn: Warehouse,
     *,
     table: str,
     rows: Sequence[Mapping[str, Any]],
@@ -170,45 +254,24 @@ def merge(
 ) -> int:
     """Upsert `rows` into `table`, matching on `key`. Returns rows written.
 
-    Every row must carry the same columns in the same order: one statement is
-    built for the whole batch, so a row of a different shape would bind its
-    values into the wrong places rather than fail.
+    Kept for callers that write a handful of rows. Locally a MERGE per row is
+    cheap, but `merge_bulk` is one statement and is what anything larger uses.
     """
-    if not rows:
-        return 0
+    return merge_bulk(conn, table=table, rows=rows, key=key, json_columns=json_columns)
 
-    columns = list(rows[0])
-    for i, row in enumerate(rows[1:], start=1):
-        if list(row) != columns:
-            raise ValueError(f"row {i} has columns {list(row)}, expected {columns}")
 
-    sql = _merge_sql(table, columns, key, json_columns)
-    params = [
-        tuple(json.dumps(row[c]) if c in json_columns else row[c] for c in columns)
-        for row in rows
-    ]
+def bookmaker_ids(conn: Warehouse) -> dict[str, int]:
+    """`{bookmaker_name: bookmaker_id}` from `dim_bookmaker`, seeded by the DDL."""
     with conn.cursor() as cur:
-        cur.executemany(sql, params)
-    return len(rows)
-
-
-def bookmaker_ids(conn: SnowflakeConnection) -> dict[str, int]:
-    """`{bookmaker_name: bookmaker_id}` from `dim_bookmaker`.
-
-    Read rather than hardcoded. The seed lives in ddl.sql; a second copy here
-    would be the same knowledge in two places, and the two would disagree the
-    first time a book is added. Five rows, once per run.
-    """
-    with conn.cursor() as cur:
-        cur.execute("SELECT bookmaker_name, bookmaker_id FROM dim_bookmaker")
+        cur.execute("SELECT bookmaker_name, bookmaker_id FROM core.dim_bookmaker")
         ids = {str(name): int(bid) for name, bid in cur.fetchall()}
     if not ids:
-        raise RuntimeError("dim_bookmaker is empty -- run snowflake/apply_ddl.py")
+        raise RuntimeError("dim_bookmaker is empty -- the DDL seed did not run")
     return ids
 
 
 def merge_bulk(
-    conn: SnowflakeConnection,
+    conn: Warehouse,
     *,
     table: str,
     rows: Sequence[Mapping[str, Any]],
@@ -216,59 +279,204 @@ def merge_bulk(
     keep: Sequence[str] = (),
     json_columns: Collection[str] = (),
 ) -> int:
-    """Upsert many rows in one round trip, via a temporary staging table.
+    """Upsert many rows in one statement, from a DataFrame registered in-process.
 
-    `merge()` sends one statement per row, which is right for a consumer
-    writing a handful of signals per message and hopeless for a load: 4,527
-    dimension rows took long enough to be killed mid-flight, leaving the table
-    silently partial. This stages the whole batch with `write_pandas` -- a PUT
-    and a COPY, not 4,527 round trips -- then MERGEs once.
+    Every row must carry the same columns. Rows are de-duplicated on `key`
+    (last one wins) first: a MERGE whose source holds a key twice would update
+    the same target row twice, which DuckDB refuses.
 
-    The staging table is TEMPORARY, so it is scoped to this session and
-    disappears with it; there is no cleanup to forget and no name to collide.
-    Columns the caller does not supply are simply not referenced, so the
-    target's defaults still apply on insert and its existing values survive an
-    update.
-
-    VARIANT columns are named in `json_columns`. They are staged as JSON TEXT
-    and parsed on the way out of staging, because a string loaded straight into
-    a VARIANT stays a string. This exists for the slip payloads: `merge()` sent
-    them one statement per row, about 1,070 MERGEs and 18 minutes of warehouse
-    time every three hours, which on its own kept the warehouse from ever
-    suspending between half-hourly runs.
+    JSON columns are serialised to text and cast on the way in, because a dict
+    in a DataFrame is not a JSON value to DuckDB.
     """
     if not rows:
         return 0
 
     columns = [_identifier(c) for c in rows[0]]
+    for i, row in enumerate(rows[1:], start=1):
+        if list(row) != columns:
+            raise ValueError(f"row {i} has columns {list(row)}, expected {columns}")
     keys = [_identifier(k) for k in key]
     if not set(keys) <= set(columns):
         raise ValueError(f"key {keys} is not a subset of columns {columns}")
 
     table = _identifier(table)
-    stage = f"{table}_stage"
     as_json = {_identifier(c) for c in json_columns}
     frame = pd.DataFrame(list(rows), columns=columns)
     for c in as_json:
-        frame[c] = frame[c].map(lambda v: None if v is None else json.dumps(v))
+        frame[c] = frame[c].map(lambda v: None if v is None else json.dumps(v, default=str))
+    frame = frame.drop_duplicates(subset=keys, keep="last")
 
-    with conn.cursor() as cur:
-        cur.execute(f"CREATE OR REPLACE TEMPORARY TABLE {stage} LIKE {table}")
-        for c in sorted(as_json):
-            cur.execute(f"ALTER TABLE {stage} DROP COLUMN {c}")
-            cur.execute(f"ALTER TABLE {stage} ADD COLUMN {c} VARCHAR")
-    # use_logical_type keeps timezone-aware timestamps correct. Without it the
-    # connector warns that they "can result in datetimes being incorrectly
-    # written" -- a silent shift on kickoff_at would move every fixture into
-    # the wrong hour and every downstream window with it.
-    write_pandas(
-        conn, frame, stage.upper(), quote_identifiers=False, use_logical_type=True
+    view = f"_stage_{table}_{threading.get_ident()}"
+    picked = ", ".join(
+        f"CAST({c} AS JSON) AS {c}" if c in as_json else c for c in columns
+    )
+    raw = conn.raw.cursor()
+    try:
+        raw.execute(f"SET TimeZone = '{TIMEZONE}'")
+        raw.execute("SET search_path = 'core,analytics,ops,main'")
+        raw.register(view, frame)
+        target = table if "." in table else _qualified(raw, table)
+        raw.execute(_merge_into(target, columns, keys, f"(SELECT {picked} FROM {view})", keep))
+    finally:
+        try:
+            raw.unregister(view)
+        finally:
+            raw.close()
+    return len(frame)
+
+
+def _qualified(raw: duckdb.DuckDBPyConnection, table: str) -> str:
+    """`schema.table` for an unqualified pipeline table (core, else ops)."""
+    found = raw.execute(
+        "SELECT table_schema FROM information_schema.tables "
+        "WHERE lower(table_name) = lower(?) AND table_schema IN ('core', 'ops', 'analytics') "
+        "ORDER BY CASE table_schema WHEN 'core' THEN 0 WHEN 'ops' THEN 1 ELSE 2 END LIMIT 1",
+        [table],
+    ).fetchone()
+    return f"{found[0]}.{table}" if found else table
+
+
+# --- the lake: large raw payloads, as Parquet outside the database -----------
+#
+# Booking-slip payloads are ~110 KB of JSON each. DuckDB stores strings that
+# long uncompressed, and 18k versions made a 3.9 GB database; the same rows as
+# zstd Parquet are 4 MB. So they are written as Parquet, partitioned by month,
+# and read through a view that looks exactly like the old table.
+
+SLIP_TABLE = "bronze_slip_payload"
+_SLIP_COLUMNS = {
+    "source": "VARCHAR",
+    "share_code": "VARCHAR",
+    "payload_hash": "VARCHAR",
+    "payload": "JSON",
+    "list_id": "VARCHAR",
+    "followed_times": "BIGINT",
+    "folds": "BIGINT",
+    "first_fetched_at": "TIMESTAMPTZ",
+    "last_fetched_at": "TIMESTAMPTZ",
+}
+
+
+def _slip_dir() -> Path:
+    return lake_path() / SLIP_TABLE
+
+
+def _parquet(path: Path) -> str:
+    return str(path).replace("\\", "/").replace("'", "''")
+
+
+def _create_lake_views(conn: duckdb.DuckDBPyConnection) -> None:
+    folder = _slip_dir()
+    if not any(folder.glob("month=*/*.parquet")):
+        # read_parquet refuses an empty glob, so an empty but correctly typed
+        # file stands in until the first fetch.
+        empty = folder / "month=0000-00"
+        empty.mkdir(parents=True, exist_ok=True)
+        columns = ", ".join(f"CAST(NULL AS {t}) AS {c}" for c, t in _SLIP_COLUMNS.items())
+        conn.execute(
+            f"COPY (SELECT {columns} LIMIT 0) TO '{_parquet(empty / 'empty.parquet')}' "
+            "(FORMAT parquet)"
+        )
+    typed = ", ".join(f"CAST({c} AS {t}) AS {c}" for c, t in _SLIP_COLUMNS.items())
+    files = f"{_parquet(folder)}/month=*/*.parquet"
+    conn.execute(
+        f"""
+        CREATE OR REPLACE VIEW core.{SLIP_TABLE} AS
+        WITH versions AS (
+            SELECT {typed}
+            FROM read_parquet('{files}', union_by_name = true)
+        )
+        SELECT * REPLACE (
+            min(first_fetched_at) OVER (
+                PARTITION BY source, share_code, payload_hash) AS first_fetched_at
+        )
+        FROM versions
+        QUALIFY row_number() OVER (
+            PARTITION BY source, share_code, payload_hash ORDER BY last_fetched_at DESC
+        ) = 1
+        """
+    )
+    # Each slip as it now stands. Finds the newest version by its small columns
+    # first and only then reads that row's payload: selecting whole rows made
+    # the engine decompress and validate all ~18k payloads (38 s) to keep 3.4k
+    # of them; this is ~6 s.
+    conn.execute(
+        f"""
+        CREATE OR REPLACE VIEW core.{SLIP_TABLE}_latest AS
+        WITH newest AS (
+            SELECT filename, file_row_number
+            FROM read_parquet('{files}', filename = true, file_row_number = true)
+            QUALIFY row_number() OVER (
+                PARTITION BY source, share_code ORDER BY last_fetched_at DESC
+            ) = 1
+        )
+        SELECT p.* EXCLUDE (filename, file_row_number, month)
+        FROM read_parquet('{files}', filename = true, file_row_number = true,
+                          hive_partitioning = true, union_by_name = true) p
+        SEMI JOIN newest n USING (filename, file_row_number)
+        """
     )
 
-    source = stage
-    if as_json:
-        picked = ", ".join(f"PARSE_JSON({c}) AS {c}" if c in as_json else c for c in columns)
-        source = f"(SELECT {picked} FROM {stage})"
-    with conn.cursor() as cur:
-        cur.execute(_merge_into(table, columns, keys, source, keep))
-    return len(rows)
+
+def append_slips(conn: Warehouse, rows: Sequence[Mapping[str, Any]]) -> int:
+    """Append slip payload versions to the lake. Returns rows written.
+
+    `first_fetched_at` defaults to `last_fetched_at` when the caller leaves it
+    out; the view takes the earliest across every copy of a version.
+    """
+    if not rows:
+        return 0
+    frame = pd.DataFrame(list(rows))
+    if "first_fetched_at" not in frame:
+        frame["first_fetched_at"] = frame["last_fetched_at"]
+    frame["payload"] = frame["payload"].map(lambda v: json.dumps(v, default=str))
+    for column in _SLIP_COLUMNS:
+        if column not in frame:
+            frame[column] = None
+    frame = frame[list(_SLIP_COLUMNS)]
+    typed = ", ".join(f"CAST({c} AS {t}) AS {c}" for c, t in _SLIP_COLUMNS.items())
+    raw = conn.raw.cursor()
+    view = f"_slips_{threading.get_ident()}"
+    try:
+        raw.execute(f"SET TimeZone = '{TIMEZONE}'")
+        raw.register(view, frame)
+        raw.execute(
+            f"COPY (SELECT {typed}, strftime(last_fetched_at, '%Y-%m') AS month FROM {view}) "
+            f"TO '{_parquet(_slip_dir())}' (FORMAT parquet, COMPRESSION zstd, "
+            "PARTITION_BY (month), APPEND, FILENAME_PATTERN 'part_{uuid}')"
+        )
+        raw.unregister(view)
+    finally:
+        raw.close()
+    return len(frame)
+
+
+def compact_slips(conn: Warehouse) -> int:
+    """Rewrite each month's small files as one. Returns files removed.
+
+    Every fetch appends a file; left alone, a year of hourly fetches is 8,760
+    of them and every query opens them all. Written to a temporary name first
+    and swapped in, so a crash mid-compaction leaves duplicates (which the view
+    already collapses) rather than a gap.
+    """
+    removed = 0
+    raw = conn.raw.cursor()
+    try:
+        for month in sorted(_slip_dir().glob("month=*")):
+            files = sorted(month.glob("*.parquet"))
+            if len(files) <= 1:
+                continue
+            target = month / "compacted.parquet.tmp"
+            raw.execute(
+                f"COPY (SELECT * FROM read_parquet('{_parquet(month)}/*.parquet', union_by_name = true) "
+                f"ORDER BY share_code, last_fetched_at) TO '{_parquet(target)}' "
+                "(FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)"
+            )
+            final = month / f"compacted_{len(files)}_{os.getpid()}.parquet"
+            target.rename(final)
+            for f in files:
+                f.unlink()
+                removed += 1
+    finally:
+        raw.close()
+    return removed

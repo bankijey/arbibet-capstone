@@ -2,8 +2,7 @@ version: 2
 
 sources:
   - name: core
-    database: ARBIBET_CAPSTONE
-    schema: CORE
+    schema: core
     description: >
       Written by the pipeline, not by dbt: the consumers write the signal
       facts, the Spark jobs write the history facts, and load_dims writes the
@@ -21,3 +20,4 @@ sources:
       - name: fact_arbitrage_track
       - name: dim_market_outcome
       - name: bronze_slip_payload
+      - name: bronze_slip_payload_latest

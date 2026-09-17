@@ -45,7 +45,7 @@ from tick t
 left join {{ source('core', 'dim_fixture') }} f on f.event_id = t.event_id
 left join {{ source('core', 'dim_bookmaker') }} b on b.bookmaker_id = t.bookmaker_id
 left join {{ source('core', 'dim_market') }} m
-       on m.market_base_id = try_to_number(t.market_base_id)
+       on m.market_base_id = try_cast(t.market_base_id as bigint)
 left join {{ source('core', 'dim_market_outcome') }} o
        on o.market_id = t.market_base_id
       and o.outcome_id = t.outcome_id

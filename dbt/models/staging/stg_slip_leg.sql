@@ -1,6 +1,11 @@
+-- A TABLE, unlike the other staging models: every slip payload's JSON is
+-- parsed here (~2 GB of text once decompressed), and as a view both gold slip
+-- models paid that parse again, about 30 seconds each.
+{{ config(materialized='table') }}
+
 -- One row per leg of every booking slip, in canonical market terms.
 --
--- Slips are stored verbatim as VARIANT, so this is where they become
+-- Slips are stored verbatim as JSON, so this is where they become
 -- queryable. Two id spaces have to be bridged, and neither is obvious:
 --
 --   * A slip names its fixture `sr:match:73936890` and its teams
@@ -34,11 +39,9 @@
 -- it were current-state-by-the-key-you-happen-to-be-joining-on. The same shape
 -- appears in `gold_slip_summary_ai` (see the dashboard's QUALIFY).
 with payload as (
+    -- Newest version per slip, already selected by the lake view.
     select *
-    from {{ source('core', 'bronze_slip_payload') }}
-    qualify row_number() over (
-        partition by source, share_code order by last_fetched_at desc
-    ) = 1
+    from {{ source('core', 'bronze_slip_payload_latest') }}
 ),
 
 fixture as (
@@ -50,7 +53,7 @@ fixture as (
     -- more useful than one that does not. `loaded_at` breaks the remaining tie.
     qualify row_number() over (
         partition by sr_match_id
-        order by iff(home_team_id is null, 1, 0), loaded_at desc
+        order by if(home_team_id is null, 1, 0), loaded_at desc
     ) = 1
 ),
 
@@ -59,25 +62,26 @@ legs as (
         s.share_code,
         s.followed_times,
         s.last_fetched_at,
-        l.index                                     as leg_index,
-        l.value:event:eventId::string               as sr_match_id,
-        l.value:event:homeTeam::string              as home_team,
-        l.value:event:awayTeam::string              as away_team,
-        l.value:event:tournament::string            as tournament,
-        -- Already LTZ: epoch milliseconds have no offset of their own,
-        -- so this renders in session time (Europe/Berlin) already.
-        to_timestamp_ltz(l.value:event:startTime::number / 1000) as kickoff_at,
-        l.value:market:id::string                   as market_id,
-        l.value:market:specifiers::string           as specifiers,
-        l.value:outcome:id::string                  as outcome_id,
-        l.value:outcome:description::string         as outcome_name,
-        l.value:outcome:odds::float                 as odds,
+        -- 0-based, as Snowflake's FLATTEN index was; ORDINALITY counts from 1.
+        l.idx - 1                                   as leg_index,
+        l.value ->> '$.event.eventId'               as sr_match_id,
+        l.value ->> '$.event.homeTeam'              as home_team,
+        l.value ->> '$.event.awayTeam'              as away_team,
+        l.value ->> '$.event.tournament'            as tournament,
+        -- Epoch milliseconds have no offset of their own; to_timestamp gives
+        -- an instant, rendered in session time (Europe/Berlin).
+        to_timestamp((l.value ->> '$.event.startTime')::bigint / 1000) as kickoff_at,
+        l.value ->> '$.market.id'                   as market_id,
+        l.value ->> '$.market.specifiers'           as specifiers,
+        l.value ->> '$.outcome.id'                  as outcome_id,
+        l.value ->> '$.outcome.description'         as outcome_name,
+        (l.value ->> '$.outcome.odds')::double      as odds,
         -- msport's own model probability. It embeds their margin, and it is
         -- what the punter was shown, which makes it the right prior to judge
         -- the slip by even though it is not truth.
-        l.value:outcome:probability::float          as book_probability
+        (l.value ->> '$.outcome.probability')::double as book_probability
     from payload s,
-         lateral flatten(input => s.payload:bettableBetSlip) l
+         unnest(cast(s.payload -> '$.bettableBetSlip' as json[])) with ordinality as l(value, idx)
 )
 
 select

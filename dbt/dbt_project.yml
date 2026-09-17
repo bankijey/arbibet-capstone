@@ -10,12 +10,10 @@ clean-targets: ["target", "dbt_packages"]
 # a custom schema onto the target one -- setting both produced
 # ANALYTICS_analytics and models that looked created but were not where
 # anything reads them.
-# Platform time, for the same reason the Python connector sets it: Snowflake's
-# session TIMEZONE defaults to America/Los_Angeles, and TIMESTAMP_TZ/LTZ are
-# rendered in it. dbt opens its own sessions, so setting it in the connector
-# does not reach here -- and a model that casts a timestamp to a DATE, or
-# compares one to a date literal, resolves that boundary in session time. Two
-# components disagreeing about midnight is a whole class of off-by-one.
+# Platform time, for the same reason warehouse.connect() sets it: a
+# TIMESTAMPTZ is rendered in the session zone, and a model that casts one to a
+# DATE, or compares one to a date literal, resolves that boundary in session
+# time. Two components disagreeing about midnight is a class of off-by-one.
 # The widest gap allowed between the oldest and newest price in an arbitrage.
 # Mirrors MAX_LEG_SPREAD_SECONDS in src/arbibet_capstone/signals.py, which now
 # REFUSES wider signals at detection; this applies the same bar to the rows
@@ -24,7 +22,7 @@ vars:
   max_leg_spread_seconds: 300
 
 on-run-start:
-  - "alter session set timezone = 'Europe/Berlin'"
+  - "SET TimeZone = 'Europe/Berlin'"
 
 models:
   arbibet_capstone:
