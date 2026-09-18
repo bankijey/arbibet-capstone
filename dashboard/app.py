@@ -34,6 +34,50 @@ load_dotenv()
 # Adding the root keeps the views importable as a package either way.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+
+def _reload_changed_modules() -> None:
+    """Re-import any `dashboard.*` module whose file changed since it was imported.
+
+    Streamlit Cloud deploys a push by re-running the page scripts in the SAME
+    process. This file and the views are read fresh every run, but shared
+    modules (`dashboard.common`, ...) stay in `sys.modules` as they were before
+    the deploy -- so a view importing a name added in that push fails with an
+    ImportError until someone reboots the app. It did: `fair_link`.
+
+    The registry lives on `sys`, the one place that survives this script being
+    re-executed.
+    """
+    import importlib
+
+    registry: dict[str, float] = sys.__dict__.setdefault("_arbibet_module_mtimes", {})
+    # Importers after what they import from.
+    order = ["dashboard.common", "dashboard.series", "dashboard.arbitrage", "dashboard.backtest"]
+    names = sorted(
+        (n for n in list(sys.modules) if n.startswith("dashboard.") and ".views." not in n),
+        key=lambda n: (order.index(n) if n in order else len(order), n),
+    )
+    for name in names:
+        module = sys.modules.get(name)
+        path = getattr(module, "__file__", None)
+        if module is None or not path:
+            continue
+        try:
+            modified = Path(path).stat().st_mtime
+        except OSError:
+            continue
+        known = registry.get(name)
+        # First sight of an already-imported module: it may predate a deploy
+        # (that is the incident this exists for), so reload it once.
+        if known is None or modified > known:
+            if known is not None or name in _PREDEPLOY:
+                importlib.reload(module)
+            registry[name] = modified
+
+
+# Modules that may be stale the first time this code runs on an already-running app.
+_PREDEPLOY = {"dashboard.common", "dashboard.series", "dashboard.charts", "dashboard.backtest"}
+_reload_changed_modules()
+
 st.set_page_config(page_title="Arbibet", page_icon="::", layout="wide")
 
 navigation = st.navigation(
