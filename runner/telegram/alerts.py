@@ -66,6 +66,9 @@ class Alerter(threading.Thread):
         self.ledger = Ledger()
         # The bot's button-token table, shared so alert buttons reach its handlers.
         self.callbacks: Any = None
+        self.dashboard = os.environ.get("DASHBOARD_URL", "https://arbibet.streamlit.app").rstrip(
+            "/"
+        )
         self._markets: tuple[float, dict[str, str]] = (0.0, {})
         self._subscribers: tuple[float, list[Any]] = (0.0, [])
 
@@ -219,8 +222,15 @@ class Alerter(threading.Thread):
         if self.callbacks is None:
             return []
         put = self.callbacks.put
+        page = [
+            {
+                "text": "📈 History and prices ↗",
+                "url": f"{self.dashboard}/fixture?event_id={opp.event_id}",
+            }
+        ]
         if signed:
             return [
+                page,
                 [
                     {"text": "✅ Placed", "callback_data": put("placed", opp, "real")},
                     {"text": "📝 Paper", "callback_data": put("placed", opp, "paper")},
@@ -231,10 +241,11 @@ class Alerter(threading.Thread):
                 ],
             ]
         return [
+            page,
             [
                 {"text": "📝 Paper bet", "callback_data": put("placed", opp, "paper")},
                 {"text": "🚩 Not on site", "callback_data": put("missing", opp)},
-            ]
+            ],
         ]
 
     # --- sending ---------------------------------------------------------------------------

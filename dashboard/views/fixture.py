@@ -1,8 +1,11 @@
-"""One fixture, in depth: how it was priced, and what the sides had been doing.
+"""One fixture, in depth: its signals, how it was priced, what the sides had been doing.
 
-Reached from the slips page's deep-dive cards and table, which pass
-`?event_id=<uuid>`. A page per fixture rather than a picker, because the answer
-to "is this slip sane?" is usually about ONE match and a link is shareable.
+THE event page. Reached from the slips page's deep-dive cards, the signal
+tables' Event links and every Telegram "history" button, all of which pass
+`?event_id=<uuid>`. A fixture with signals shows its surebets and EV over
+time here (dashboard/event_signals.py) beside the deep dive below. A page per
+fixture rather than a picker, because the answer to "is this slip sane?" is
+usually about ONE match and a link is shareable.
 
 Data: the fixture's deep-dive document in Supabase (`serving.dive`), built by
 the runner from the warehouse -- the pre-match brief, the post-match note, the
@@ -28,7 +31,8 @@ from __future__ import annotations
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-from dashboard.common import at, dive, kickoff, points
+from dashboard import event_signals
+from dashboard.common import at, dive, document, kickoff, points
 from dashboard.series import POINTS
 
 FORM_WINDOW = 10
@@ -57,7 +61,9 @@ def _pct(v: object) -> str:
     return "—" if v is None or pd.isna(v) else f"{float(v):.0%}"
 
 
-st.page_link("views/slips.py", label="← back to betting slips")
+back = st.columns([1, 1, 6])
+back[0].page_link("views/overview.py", label="← market signals")
+back[1].page_link("views/slips.py", label="← betting slips")
 
 # A shared URL carries `?event_id=`; an in-app click hands it over in
 # session_state, because switch_page clears the query string.
@@ -69,14 +75,29 @@ if not event_id:
     st.stop()
 
 d = dive(str(event_id))
+signals = event_signals.for_event(document("signals"), str(event_id))
 if d is None:
-    st.error(
-        "No deep dive for this fixture. Deep dives are published for slipped fixtures "
-        "and kept for 45 days after kick-off."
-    )
+    # A fixture with signals but no published deep dive yet: its signals are
+    # still worth the page.
+    head = event_signals.header(signals)
+    if head is None:
+        st.error(
+            "Nothing published for this fixture. Event pages exist for fixtures with a "
+            "signal or a booking slip, and are kept for 45 days after kick-off."
+        )
+        st.stop()
+    kicked = at(head[1]) if head[1] else None
+    st.title(head[0])
+    if kicked is not None:
+        st.caption(f"kick-off {kicked:%A %d %B %Y, %H:%M}")
+    played = kicked is not None and kicked <= pd.Timestamp.now(tz="UTC")
+    event_signals.arbitrage_section(signals, kicked, played)
+    event_signals.ev_section(signals, kicked, played)
+    st.info("The deep dive for this fixture is published with the next warm cycle.")
     st.stop()
 
 kicked = at(d["kickoffAt"])
+played = kicked <= pd.Timestamp.now(tz="UTC")
 st.title(f"{d['home']} v {d['away']}")
 st.caption(f"{d['tournament'] or 'competition unknown'} · kick-off {kicked:%A %d %B %Y, %H:%M}")
 
@@ -106,6 +127,11 @@ if result:
         st.caption("After full time")
         st.markdown(result["summary"])
         st.caption(f"Written once by `{result['model']}`, {kickoff(result['generatedAt'])}.")
+
+if signals["legs"] or signals["ev"]:
+    st.divider()
+    event_signals.arbitrage_section(signals, kicked, played)
+    event_signals.ev_section(signals, kicked, played)
 
 st.divider()
 st.subheader("How the books priced it")

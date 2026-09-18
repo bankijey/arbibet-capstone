@@ -239,8 +239,22 @@ def publish(warehouse: Warehouse, run: Any, full: bool = False) -> int:
         if _write_document(conn, "slips", {"generatedAt": snap._iso(now), **slips}):
             written += 1
 
-        # Dives: every slipped fixture inside the retention window.
-        popular = pd.DataFrame(slips["popular"])
+        # Dives: every slipped fixture inside the retention window, and every
+        # fixture with a surebet or an EV signal -- each has an event page.
+        popular = pd.DataFrame(slips["popular"], columns=["eventId", "kickoffAt"])
+        signalled = warehouse.query(
+            """
+            SELECT DISTINCT s.event_id AS "eventId", f.kickoff_at AS "kickoffAt"
+            FROM (
+                SELECT event_id FROM ANALYTICS.stg_arbitrage_signal WHERE is_surebet
+                UNION
+                SELECT event_id FROM ANALYTICS.stg_ev_signal
+            ) s
+            JOIN CORE.dim_fixture f ON f.event_id = s.event_id
+            """
+        )
+        signalled.columns = ["eventId", "kickoffAt"]
+        popular = pd.concat([popular, signalled], ignore_index=True).drop_duplicates("eventId")
         dives_written = 0
         if not popular.empty:
             popular["kickoff"] = pd.to_datetime(popular.kickoffAt, utc=True)

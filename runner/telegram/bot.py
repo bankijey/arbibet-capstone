@@ -106,6 +106,10 @@ def url_button(text: str, url: str) -> dict[str, str]:
     return {"text": text, "url": url}
 
 
+def event_url(dashboard: str, event_id: str) -> str:
+    return f"{dashboard.rstrip('/')}/fixture?event_id={event_id}"
+
+
 class Callbacks:
     """Short tokens for button payloads, newest 20,000 kept."""
 
@@ -271,7 +275,6 @@ class Bot(threading.Thread):
         card = cards[index]
         self.viewing[chat_id] = card
         stake = self._settings(chat_id).stake
-        ids = (card["eventId"], card["marketId"])
         nav = []
         if index > 0:
             nav.append(button("◀ Prev", self.callbacks.put("surebet", index - 1)))
@@ -282,10 +285,7 @@ class Bot(threading.Thread):
             nav,
             [
                 button("💰 Split", self.callbacks.put("split", card)),
-                button(
-                    "📈 Over time",
-                    self.callbacks.put("track", *ids, card["fixture"], card["market"]),
-                ),
+                url_button("📈 History ↗", self.event_url(card["eventId"])),
             ],
             [
                 button(
@@ -331,20 +331,6 @@ class Bot(threading.Thread):
         stake = self._settings(chat_id).stake
         self.api.send(
             chat_id, render.stake_table(card["legs"], [leg["odds"] for leg in card["legs"]], stake)
-        )
-
-    def on_track(
-        self,
-        chat_id: int,
-        message_id: int | None,
-        event_id: str,
-        market_id: str,
-        fixture: str,
-        market: str,
-    ) -> None:
-        self.api.send(
-            chat_id,
-            render.track_summary(self._signals(), event_id, market_id, f"{fixture} · {market}"),
         )
 
     def cmd_stake(self, chat_id: int, args: list[str], user: str | None) -> None:
@@ -475,9 +461,10 @@ class Bot(threading.Thread):
         keyboard: list[list[dict[str, str]]] = []
         page = rows[start : start + EV_PAGE]
         if page:
+            # Price history and EV over time are charts: the event page has them.
             keyboard.append(
                 [
-                    button(f"💹 {n}", self.callbacks.put("prices", row))
+                    url_button(f"📈 {n} ↗", self.event_url(row["eventId"]))
                     for n, row in enumerate(page, start=1)
                 ]
             )
@@ -501,13 +488,6 @@ class Bot(threading.Thread):
                 keyboard.append(nav)
         self.reply(
             chat_id, render.ev_page(rows, start, EV_PAGE, threshold, now), keyboard, message_id
-        )
-
-    def on_prices(self, chat_id: int, message_id: int | None, row: dict[str, Any]) -> None:
-        self.api.send(
-            chat_id,
-            render.price_summary(self._signals(), row),
-            [[button("🔎 Deep dive", self.callbacks.put("dive", row["eventId"]))]],
         )
 
     # --- slips ------------------------------------------------------------------------------
@@ -563,12 +543,13 @@ class Bot(threading.Thread):
         for leg in legs:
             seen.setdefault(leg["eventId"], f"{leg.get('home')} v {leg.get('away')}")
         keyboard = [
-            [button(name, self.callbacks.put("dive", event_id))] for event_id, name in seen.items()
+            [url_button(f"{name} ↗", self.event_url(event_id))] for event_id, name in seen.items()
         ]
         self.api.send(
             chat_id,
-            f"🔎 Deep dive into which match of <code>{render.e(share_code)}</code>?",
-            keyboard or None,
+            f"🔎 The matches of <code>{render.e(share_code)}</code>. Each opens its event page: "
+            "prices, form, settled markets, what punters backed, and any surebet or EV on it.",
+            keyboard[:40] or None,
         )
 
     # --- deep dives -------------------------------------------------------------------------
@@ -637,7 +618,11 @@ class Bot(threading.Thread):
         self.api.send(chat_id, render.dive_overview(dive, datetime.now(UTC)), keyboard)
 
     def dive_url(self, event_id: str) -> str:
-        return f"{self.dashboard}/fixture?event_id={event_id}"
+        return self.event_url(event_id)
+
+    def event_url(self, event_id: str) -> str:
+        """The fixture's page on the dashboard: every chart and history lives there."""
+        return event_url(self.dashboard, event_id)
 
     def on_dive_part(self, chat_id: int, message_id: int | None, event_id: str, part: str) -> None:
         dive = self.store.dive(event_id)

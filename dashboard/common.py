@@ -275,6 +275,24 @@ def points(series: list[list[Any]], *names: str) -> pd.DataFrame:
     return data
 
 
+def fair_link(url: Any, probability: Any) -> str | None:
+    """The source book's fixture page, carrying the fair odds for a LinkColumn to show.
+
+    A LinkColumn can only take its text from the URL, so the number rides in the
+    fragment (`#fair-odds-2.13`), which the book's site ignores.
+    """
+    if not isinstance(url, str) or not url or probability is None or pd.isna(probability):
+        return None
+    if float(probability) <= 0:
+        return None
+    return f"{url}#fair-odds-{1 / float(probability):.2f}"
+
+
+def event_link(event_id: Any) -> str | None:
+    """This dashboard's page for a fixture, relative so it works wherever it is hosted."""
+    return f"/fixture?event_id={event_id}" if event_id else None
+
+
 def published_at(value: str | None) -> str:
     stamp = at(value)
     return "unknown" if stamp is None else f"{stamp:%Y-%m-%d %H:%M}"

@@ -167,6 +167,11 @@ the same Supabase documents as the dashboard and never touch DuckDB.
   does the same in a practice wallet that starts at ₦100,000 per book.
   `/wallet` shows equity, locked-in profit on open surebets and settled P&L.
   Bets settle in the warm loop from `fact_team_market_result`, leg by leg.
+- **Charts and history live on the dashboard.** Every alert, surebet card, EV
+  row and slip leg links to the fixture's event page (`/fixture?event_id=`):
+  its surebets and EV over time, every book's prices, both sides' form,
+  settled markets and what punters backed. In EV messages "fair odds" links
+  to the fixture at the book the probability came from.
 - **Access:** anyone may read; sizing, the wallet and Placed need a balance
   set; the owner (`TELEGRAM_OWNER_CHAT`) has `/admin`. Deep dives show a
   screen and link the rest to the dashboard.

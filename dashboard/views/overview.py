@@ -19,6 +19,8 @@ from dashboard.arbitrage import stake_split
 from dashboard.charts import arbitrage_chart, book_bars, efficiency_bars, odds_chart
 from dashboard.common import (
     document,
+    event_link,
+    fair_link,
     flags,
     frame,
     is_upcoming,
@@ -246,6 +248,7 @@ def _prepare(version: str) -> dict[str, pd.DataFrame]:
             "url": "URL",
             "impliedP": "IMPLIED_P",
             "comparable": "P_SOURCE",
+            "comparableUrl": "P_SOURCE_URL",
             "timeLapseSeconds": "PROBABILITY_SPREAD_SECONDS",
             "ev": "EV",
             "kickoffAt": "KICKOFF_AT",
@@ -276,6 +279,12 @@ def _prepare(version: str) -> dict[str, pd.DataFrame]:
     )
     for data in (legs, ev_all):
         data["OFFERED_NOW"] = data.apply(_offered_text, axis=1) if not data.empty else []
+    # Fair odds = 1 / probability, linked to the fixture at the book the
+    # probability came from; Event = this fixture's page, with its full history.
+    ev_all["FAIR"] = [
+        fair_link(u, p) for u, p in zip(ev_all.P_SOURCE_URL, ev_all.IMPLIED_P, strict=True)
+    ]
+    ev_all["EVENT"] = ev_all.EVENT_ID.map(event_link)
     ev_all["FRESHNESS"] = ev_all.IS_FRESH.map(
         lambda v: "not recorded" if pd.isna(v) else ("fresh" if v else "stale")
     )
@@ -326,6 +335,18 @@ BET_LINK = st.column_config.LinkColumn(
     help="The match on this bookmaker. msport shows a first-time visitor "
     "its welcome page once; open the link again.",
 )
+FAIR_LINK = st.column_config.LinkColumn(
+    "Fair odds",
+    display_text=r"#fair-odds-(.+)$",
+    help="1 / probability. Opens this fixture at the book the probability came from "
+    "(sportybet or msport), where the number can be checked.",
+)
+EVENT_LINK = st.column_config.LinkColumn(
+    "Event",
+    display_text="history ↗",
+    help="This fixture's page: its surebets and EV over time, every book's prices, both "
+    "sides' form, settled markets and what punters backed.",
+)
 FLAG = st.column_config.CheckboxColumn(
     "✕ not on site",
     help="Tick if the market is not on the bookmaker's site. The leg is hidden "
@@ -344,7 +365,8 @@ EV_COLUMNS = {
     "URL": "Bet",
     "EV": "EV",
     "IMPLIED_P": "Implied p",
-    "P_SOURCE": "Comparable",
+    "FAIR": "Fair odds",
+    "EVENT": "Event",
     "PROBABILITY_SPREAD_SECONDS": "Time lapse (s)",
     "FRESHNESS": "Freshness",
     "KICKOFF_AT": "Kick-off",
@@ -504,6 +526,7 @@ def _upcoming_cards(legs: pd.DataFrame, track: pd.DataFrame, standing_all: pd.Da
                     delta=f"{standing.ARBITRAGE - head.ARBITRAGE:+.4f} vs best",
                 )
             m4.metric("Kick-off", kickoff(head.KICKOFF_AT))
+            st.markdown(f"[Everything on this fixture ↗]({event_link(event_id)})")
             if (
                 standing is not None
                 and pd.notna(standing.ARBITRAGE)
@@ -888,6 +911,8 @@ def ev_section() -> None:
                 column_config={
                     **{c: EV_COLUMNS[c] for c in columns},
                     "URL": BET_LINK,
+                    "FAIR": FAIR_LINK,
+                    "EVENT": EVENT_LINK,
                     "FLAG": FLAG,
                 },
             )
@@ -921,7 +946,7 @@ def ev_section() -> None:
             columns = [c for c in EV_COLUMNS if c in past.columns]
             st.dataframe(
                 past[columns].rename(columns=EV_COLUMNS),
-                column_config={"Bet": BET_LINK},
+                column_config={"Bet": BET_LINK, "Fair odds": FAIR_LINK, "Event": EVENT_LINK},
                 hide_index=True,
                 use_container_width=True,
             )
