@@ -265,6 +265,7 @@ class Alerter(threading.Thread):
             opp = replace(
                 opp,
                 legs=tuple(replace(leg, url=links.get(leg.book)) for leg in opp.legs),
+                p_source_url=links.get(opp.p_source) if opp.p_source else None,
             )
             for subscriber in due:
                 try:

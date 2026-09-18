@@ -49,6 +49,9 @@ class Opportunity:
     spread_seconds: int | None = None
     probability: float | None = None
     p_source: str | None = None
+    # The fixture's page at the book the probability came from: what the
+    # reader opens to see the number the EV was measured against.
+    p_source_url: str | None = None
     outcome_id: str | None = None
 
     @property

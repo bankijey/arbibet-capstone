@@ -118,6 +118,15 @@ def _upcoming(value: Any, now: datetime) -> bool:
 # --- alerts ---------------------------------------------------------------------------
 
 
+def fair_odds(probability: float, source: str | None, url: str | None) -> str:
+    """'fair odds 2.13', linked to the fixture at the book the probability came from.
+    Without a link the book is named instead, so the number still has a source."""
+    text = f"fair odds {1 / probability:.2f}"
+    if url:
+        return link(url, text)
+    return f"{text} ({e(source)})" if source else text
+
+
 NUDGE = (
     "<i>Stakes sized to your own balances at each book: set them with "
     "<code>/balance msport 50000</code>.</i>"
@@ -183,8 +192,8 @@ def alert(opp: Opportunity, now: datetime, sizing: Any = None) -> str:
     ]
     if opp.probability:
         lines.append(
-            f"Probability {opp.probability:.1%} ({e(opp.p_source)}) → fair odds "
-            f"{1 / opp.probability:.2f}"
+            f"Probability {opp.probability:.1%} → "
+            + fair_odds(opp.probability, opp.p_source, opp.p_source_url)
         )
     if stakes:
         lines.append(
@@ -434,7 +443,8 @@ def ev_page(
             f"<b>{n}. EV {pct(r['ev'])}</b> · {e(r['outcome'])} @ <b>{r['odds']:.2f}</b> "
             f"{link(r.get('url'), r['book'])}{_offered(r)}",
             f"    {e(r['fixture'])} · {e(market_label(r['market'], r.get('line')))}",
-            f"    p {r['impliedP']:.1%} ({e(r.get('comparable'))}) · kick-off "
+            f"    p {r['impliedP']:.1%} → "
+            f"{fair_odds(r['impliedP'], r.get('comparable'), r.get('comparableUrl'))} · kick-off "
             f"{when(r['kickoffAt'])} ({until(r['kickoffAt'], now)})",
         ]
     return clip("\n".join(lines))
@@ -457,7 +467,10 @@ def price_summary(doc: dict[str, Any], row: dict[str, Any]) -> str:
             f"{when(series[-1][0])}"
         )
     if row.get("impliedP"):
-        lines.append(f"\nFair odds from p {row['impliedP']:.1%}: {1 / row['impliedP']:.2f}")
+        lines.append(
+            f"\nProbability {row['impliedP']:.1%} → "
+            + fair_odds(row["impliedP"], row.get("comparable"), row.get("comparableUrl"))
+        )
     return clip("\n".join(lines))
 
 

@@ -188,8 +188,19 @@ def test_surebet_alert_escapes_and_shows_the_split():
 def test_ev_alert_shows_probability_and_fair_odds():
     text = render.alert(ev(0.034), NOW, size_ev(0.034, 2.2, "msport", {"msport": 50}, 50, 50))
     assert "EV +3.40%" in text
-    assert "fair odds 2.13" in text
+    # No link known: the source book is named beside the fair odds.
+    assert "fair odds 2.13 (sportybet)" in text
     assert _balanced(text)
+    # With the source's page: "fair odds" IS the link, and the book name is gone.
+    from dataclasses import replace
+
+    linked = render.alert(
+        replace(ev(0.034), p_source_url="https://www.sportybet.com/ng/sport/x?a=1&b=2"),
+        NOW,
+        None,
+    )
+    assert '<a href="https://www.sportybet.com/ng/sport/x?a=1&amp;b=2">fair odds 2.13</a>' in linked
+    assert "(sportybet)" not in linked and _balanced(linked)
 
 
 def test_clip_stays_under_the_limit_and_cuts_at_a_line():
@@ -289,6 +300,11 @@ def test_ev_list_is_fresh_upcoming_and_above_threshold():
     assert [r["ev"] for r in rows] == [0.034, 0.02]
     page = render.ev_page(rows, 0, 5, 0.015, NOW)
     assert "1–2 of 2" in page and _balanced(page)
+    assert "fair odds 2.13 (sportybet)" in page
+    rows[0]["comparableUrl"] = "https://m.example/e"
+    assert '<a href="https://m.example/e">fair odds 2.13</a>' in render.ev_page(
+        rows, 0, 5, 0.015, NOW
+    )
     assert "No upcoming EV" in render.ev_page([], 0, 5, 0.1, NOW)
 
 

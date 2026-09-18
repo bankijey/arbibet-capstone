@@ -277,12 +277,16 @@ def signals(wh: Warehouse) -> dict[str, Any]:
           COALESCE(f.home_team || ' v ' || f.away_team, s.event_id) AS fixture,
           COALESCE(m.market_name, 'market ' || s.market_base_id)    AS market,
           s.specifier AS line, s.outcome_name, s.bookmaker_name,
-          s.odds, u.url, s.implied_p, s.p_source, s.probability_spread_seconds, s.ev,
+          s.odds, u.url, s.implied_p, s.p_source, pu.url AS p_source_url,
+          s.probability_spread_seconds, s.ev,
           f.kickoff_at, s.detected_at, s.is_fresh
         FROM ANALYTICS.stg_ev_signal s
         LEFT JOIN CORE.dim_fixture f ON f.event_id = s.event_id
         LEFT JOIN ANALYTICS.stg_event_link u
           ON u.event_id = s.event_id AND u.bookmaker_name = s.bookmaker_name
+        -- The fixture at the book the probability was borrowed from.
+        LEFT JOIN ANALYTICS.stg_event_link pu
+          ON pu.event_id = s.event_id AND pu.bookmaker_name = s.p_source
         LEFT JOIN CORE.dim_market m ON m.market_base_id = s.market_base_id
         WHERE s.detected_at < f.kickoff_at
         ORDER BY s.ev DESC
@@ -480,6 +484,7 @@ def signals(wh: Warehouse) -> dict[str, Any]:
                     "URL": "url",
                     "IMPLIED_P": "impliedP",
                     "P_SOURCE": "comparable",
+                    "P_SOURCE_URL": "comparableUrl",
                     "PROBABILITY_SPREAD_SECONDS": "timeLapseSeconds",
                     "EV": "ev",
                     "KICKOFF_AT": "kickoffAt",
