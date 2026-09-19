@@ -239,6 +239,12 @@ class Alerter(threading.Thread):
                     {"text": "✏️ Odds changed", "callback_data": put("odds", opp)},
                     {"text": "🚩 Not on site", "callback_data": put("missing", opp)},
                 ],
+                [
+                    {
+                        "text": "⚠️ Wrong match",
+                        "callback_data": put("wrong_match", opp.event_id, opp.fixture),
+                    }
+                ],
             ]
         return [
             page,

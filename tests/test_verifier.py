@@ -236,3 +236,29 @@ def test_the_model_proposes_a_partial_match_once(wh):
     verifier.check(fixture, payloads)
     assert verifier.client.calls == 1  # remembered, not re-asked
     assert verifier.stats["model_calls"] == 1
+
+
+def test_a_fixture_flagged_whole_yields_nothing_until_restored(wh, tmp_path):
+    _signals(wh)
+    verifier = FixtureVerifier(wh)
+    changed: list[int] = []
+    verifier.on_change = lambda: changed.append(1)
+
+    removed = verifier.flag_fixture(str(EVENT), True, "chat 7", "Levski Sofia v Ludogorets")
+    assert removed == 4  # both arbitrage signals and both EV signals
+    assert _keys(wh, "fact_arbitrage_signal") == set() == _keys(wh, "fact_ev_signal")
+    accepted, result = verifier.check(LEVSKI, PAYLOADS)
+    assert accepted == {} and list(result.checks) == ["*"]
+    assert verifier.mismatched() == {str(EVENT): {"*"}}
+    assert list(verifier.flagged_fixtures()) == [str(EVENT)] and changed == [1]
+    # The review file names it, and a fresh instance still excludes it.
+    queue = json.loads((tmp_path / "local" / "fixture_checks.json").read_text(encoding="utf-8"))
+    (row,) = (c for c in queue["checks"] if c["book"] == "*")
+    assert row["verdict"] == "mismatch" and row["fixture"] == "Levski Sofia v Ludogorets"
+    assert FixtureVerifier(wh).check(LEVSKI, PAYLOADS)[0] == {}
+
+    verifier.flag_fixture(str(EVENT), False, "chat 7")
+    accepted, _ = verifier.check(LEVSKI, PAYLOADS)
+    assert "livescorebet" in accepted and verifier.flagged_fixtures() == {}
+    # What each book lists is available to show the person deciding.
+    assert verifier.book_names(str(EVENT))["msport"][0] == "SFC Etar Veliko Tarnovo"

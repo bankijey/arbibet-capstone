@@ -197,6 +197,7 @@ def main() -> int:
     # Books proposed as pricing a different match under a fixture's id go to a
     # local review queue; only a confirmed decision excludes one (runner/verifier.py).
     verifier = shared_verifier(warehouse)
+    verifier.on_change = publisher.request
     verifier.write_local()
     hot = HotLoop(
         warehouse,

@@ -151,7 +151,11 @@ def main() -> int:
             history = bronze.payload_history(source, UUID(event_id), cursors.get(event_id))
             fetch_seconds += time.monotonic() - started
             if event_id in excluded:
-                history = [h for h in history if h.bookmaker not in excluded[event_id]]
+                history = [
+                    h
+                    for h in history
+                    if "*" not in excluded[event_id] and h.bookmaker not in excluded[event_id]
+                ]
             payloads += len(history)
             megabytes += sum(len(h.payload) for h in history)
             if not history:

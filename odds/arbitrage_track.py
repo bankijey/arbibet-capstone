@@ -123,6 +123,8 @@ def main() -> int:
             history = bronze.payload_history(
                 source, UUID(event_id), since=resume, until=kickoff[event_id]
             )
+            if "*" in excluded.get(event_id, ()):
+                continue  # the whole fixture was flagged as a wrong match
             if event_id in excluded:
                 history = [h for h in history if h.bookmaker not in excluded[event_id]]
             if not history:

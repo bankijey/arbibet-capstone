@@ -189,6 +189,7 @@ def review() -> None:
                     st.rerun()
 
     st.subheader("Decided")
+    st.caption("Book `*` is the whole fixture, flagged as a wrong match in Telegram or here.")
     decided = checks[checks.verdict.isin(["mismatch", "cleared"]) | checks.decided.notna()].copy()
     if decided.empty:
         st.caption("No decisions yet.")

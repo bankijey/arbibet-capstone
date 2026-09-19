@@ -39,6 +39,7 @@ join {{ source('core', 'dim_bookmaker') }} b using (bookmaker_id)
 -- (arbibet_capstone.verify; core.fixture_check).
 where not exists (
     select 1 from {{ source('core', 'fixture_check') }} c
-    where c.event_id = e.event_id and c.bookmaker_name = b.bookmaker_name
+    -- '*' is the whole fixture, flagged as a wrong match.
+    where c.event_id = e.event_id and c.bookmaker_name in (b.bookmaker_name, '*')
       and c.verdict = 'mismatch'
 )

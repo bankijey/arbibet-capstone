@@ -4,7 +4,7 @@
     /surebets         upcoming surebet cards: best, now, legs, links, stake split
     /stake            split a stake across the card in view, with your own odds
     /ev [threshold]   upcoming positive EV, with price history
-    /flags            legs marked "not on site", and undo
+    /flags            legs marked "not on site" and fixtures flagged as wrong matches; undo
     /slips            popular upcoming and played slips, leg by leg, with the AI verdict
     /dive [search]    fixture deep dive: brief, prices, form, settled markets, punters
     /health           the pipeline's own record
@@ -299,6 +299,12 @@ class Bot(threading.Thread):
                 button("🚩 Flag a leg", self.callbacks.put("flag_pick", card)),
                 button("🔎 Deep dive", self.callbacks.put("dive", card["eventId"])),
             ],
+            [
+                button(
+                    "⚠️ Wrong match",
+                    self.callbacks.put("wrong_match", card["eventId"], card["fixture"]),
+                )
+            ],
         ]
         self.reply(
             chat_id, render.surebet_card(card, index, len(cards), stake, now), keyboard, message_id
@@ -406,10 +412,109 @@ class Bot(threading.Thread):
             "/flags to undo.",
         )
 
+    # --- wrong matches ------------------------------------------------------------------------
+    #
+    # The matcher upstream sometimes files two matches under one fixture, and
+    # then two unrelated prices read as a surebet. A signed user who opens the
+    # links and sees different matches can say so: the fixture then yields no
+    # arbitrage and no EV for anyone, its stored signals are removed, and the
+    # decision shows on the local review dashboard, where it can be reversed.
+
+    def _verifier(self) -> Any:
+        from runner.verifier import shared
+
+        return shared(self.warehouse)
+
+    def on_wrong_match(
+        self, chat_id: int, message_id: int | None, event_id: str, fixture: str
+    ) -> None:
+        if not self._signed(chat_id):
+            self.api.send(
+                chat_id,
+                "Flagging a wrong match removes the fixture for everyone, so it needs a signed "
+                "user: set a balance first (<code>/balance msport 50000</code>).",
+            )
+            return
+        lines = [
+            f"⚠️ <b>Wrong match?</b>\n<b>{render.e(fixture)}</b>",
+            "",
+            "Flag it if the bookmakers' pages are DIFFERENT matches. The fixture then stops "
+            "appearing as arbitrage or EV for everyone and its signals are removed. "
+            "/flags undoes it.",
+        ]
+        names = self._verifier().book_names(event_id)
+        if names:
+            lines += ["", "What each book lists under this fixture:"]
+            lines += [
+                f"• {render.e(book)}: {render.e(home)} v {render.e(away)}"
+                for book, (home, away) in sorted(names.items())
+            ]
+        self.api.send(
+            chat_id,
+            "\n".join(lines),
+            [
+                [
+                    button(
+                        "⚠️ Yes, wrong match",
+                        self.callbacks.put("wrong_match_confirm", event_id, fixture),
+                    ),
+                    button("Cancel", self.callbacks.put("cancel")),
+                ]
+            ],
+        )
+
+    def on_cancel(self, chat_id: int, message_id: int | None) -> None:
+        self.reply(chat_id, "Cancelled. Nothing was flagged.", message_id=message_id)
+
+    def on_wrong_match_confirm(
+        self, chat_id: int, message_id: int | None, event_id: str, fixture: str
+    ) -> None:
+        removed = self._verifier().flag_fixture(event_id, True, f"chat {chat_id}", fixture)
+        self.store.add_report(chat_id, event_id, "*", "*", "wrong_match")
+        self._count("wrong_matches")
+        self.reply(
+            chat_id,
+            f"⚠️ <b>{render.e(fixture)}</b> is flagged as a wrong match. It no longer appears as "
+            f"arbitrage or EV ({removed} stored signals removed), and no alerts will be sent "
+            "for it. /flags to undo.",
+            message_id=message_id,
+        )
+
+    def on_restore_match(
+        self, chat_id: int, message_id: int | None, event_id: str, fixture: str
+    ) -> None:
+        self._verifier().flag_fixture(event_id, False, f"chat {chat_id}", fixture)
+        self.api.send(
+            chat_id,
+            f"↩ <b>{render.e(fixture)}</b> is restored. Its signals return as its prices are "
+            "next recomputed.",
+        )
+
     def cmd_flags(self, chat_id: int, args: list[str], user: str | None) -> None:
+        wrong = self._verifier().flagged_fixtures()
+        if wrong:
+            names = self._fixture_names()
+            lines = ["⚠️ <b>Fixtures flagged as wrong matches</b>", ""]
+            keyboard = []
+            for n, (event_id, check) in enumerate(list(wrong.items())[:20], start=1):
+                fixture = self._verifier()._fixtures.get(event_id, {}).get("fixture") or names.get(
+                    event_id, event_id[:8]
+                )
+                lines.append(f"{n}. {render.e(fixture)} · {render.e(check.explanation)}")
+                keyboard.append(
+                    [
+                        button(
+                            f"↩ Restore {n}",
+                            self.callbacks.put("restore_match", event_id, str(fixture)),
+                        )
+                    ]
+                )
+            self.api.send(chat_id, "\n".join(lines), keyboard)
         rows = self.store.flag_rows()[:20]
         if not rows:
-            self.api.send(chat_id, "No legs are flagged.")
+            self.api.send(
+                chat_id, "No legs are flagged." if not wrong else "No single legs are flagged."
+            )
             return
         names = self._fixture_names()
         lines = ["🚩 <b>Flagged legs</b> (newest 20)", ""]
@@ -475,6 +580,15 @@ class Bot(threading.Thread):
                         self.callbacks.put(
                             "flag", row["eventId"], row["marketId"], row["book"], row["fixture"]
                         ),
+                    )
+                    for n, row in enumerate(page, start=1)
+                ]
+            )
+            keyboard.append(
+                [
+                    button(
+                        f"⚠️ {n}",
+                        self.callbacks.put("wrong_match", row["eventId"], row["fixture"]),
                     )
                     for n, row in enumerate(page, start=1)
                 ]

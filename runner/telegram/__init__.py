@@ -50,6 +50,7 @@ COUNTERS = (
     "bets_recorded",
     "balances_set",
     "odds_reports",
+    "wrong_matches",
 )
 
 

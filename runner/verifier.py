@@ -45,6 +45,10 @@ log = logging.getLogger("runner.verifier")
 RETRY = timedelta(minutes=10)
 # Verdicts a person made; automation never overwrites them.
 DECIDED = ("mismatch", "cleared")
+# The "book" of a decision about the WHOLE fixture: a subscriber flagged it as a
+# wrong match in Telegram (or a reviewer did locally). While it stands, the
+# fixture yields no arbitrage and no EV at all.
+WHOLE_FIXTURE = "*"
 
 
 def local_dir() -> Path:
@@ -71,6 +75,8 @@ class FixtureVerifier:
         self._fixtures: dict[str, dict[str, Any]] = {}
         self._loaded = False
         self._decisions_seen = 0.0
+        # Called after a whole-fixture flag changes, so serving is republished at once.
+        self.on_change: Any = None
         self.stats = {"checked": 0, "model_calls": 0, "candidates": 0, "decided": 0}
 
     # --- state -------------------------------------------------------------------
@@ -116,10 +122,13 @@ class FixtureVerifier:
 
     def check(self, fixture: Fixture, payloads: Mapping[str, Any]) -> tuple[dict[str, Any], Result]:
         """Payloads minus the books a person excluded from `fixture`, and every verdict
-        (candidates included, for the queue)."""
+        (candidates included, for the queue). A fixture flagged whole yields nothing."""
         event_id = str(fixture.event_id)
         with self._lock:
             self._load()
+            whole = self._cache.get(event_id, {}).get(WHOLE_FIXTURE)
+            if whole is not None and whole.verdict == "mismatch":
+                return {}, Result(checks={WHOLE_FIXTURE: whole})
             known = dict(self._cache.get(event_id, {}))
             now = datetime.now(UTC)
             for book, check in list(known.items()):
@@ -316,11 +325,83 @@ class FixtureVerifier:
             self.purge(event_id, book)
         return applied
 
+    # --- whole-fixture flags (Telegram, or the local dashboard) -------------------------------
+
+    def flagged_fixtures(self) -> dict[str, Check]:
+        with self._lock:
+            self._load()
+            return {
+                e: checks[WHOLE_FIXTURE]
+                for e, checks in self._cache.items()
+                if WHOLE_FIXTURE in checks and checks[WHOLE_FIXTURE].verdict == "mismatch"
+            }
+
+    def book_names(self, event_id: str) -> dict[str, tuple[str | None, str | None]]:
+        """What each checked book lists for the fixture, for the person deciding."""
+        with self._lock:
+            self._load()
+            return {
+                b: (c.home, c.away)
+                for b, c in self._cache.get(event_id, {}).items()
+                if b != WHOLE_FIXTURE and (c.home or c.away)
+            }
+
+    def flag_fixture(
+        self, event_id: str, flagged: bool, by: str, fixture: str | None = None
+    ) -> int:
+        """Exclude a fixture from arbitrage and EV (or restore it). Returns signals removed."""
+        now = datetime.now(UTC)
+        verdict = "mismatch" if flagged else "cleared"
+        check = Check(
+            WHOLE_FIXTURE,
+            None,
+            None,
+            verdict,
+            "review",
+            f"{'flagged as a wrong match' if flagged else 'restored'} by {by}",
+        )
+        row = verify.row(event_id, check, now, self.model)
+        row["reviewed_at"] = now
+        row["note"] = fixture
+        with self._lock:
+            self._load()
+            merge_bulk(
+                self.warehouse,
+                table="fixture_check",
+                rows=[row],
+                key=["event_id", "bookmaker_name"],
+            )
+            self._cache.setdefault(event_id, {})[WHOLE_FIXTURE] = check
+            self._checked[(event_id, WHOLE_FIXTURE)] = now
+            if fixture:
+                self._fixtures.setdefault(event_id, {})["fixture"] = fixture
+            self.stats["decided"] += 1
+            self._write_local()
+        removed = self.purge(event_id, WHOLE_FIXTURE) if flagged else 0
+        if self.on_change:
+            try:
+                self.on_change()
+            except Exception:
+                log.warning("change hook failed", exc_info=True)
+        return removed
+
     def purge(self, event_id: str, book: str) -> int:
         """Remove a confirmed wrong book's signals for the fixture: every arbitrage
-        signal with a leg from it, and every EV signal at it."""
+        signal with a leg from it, and every EV signal at it. `WHOLE_FIXTURE`
+        removes every signal the fixture has."""
         removed = 0
         raw = self.warehouse.raw.cursor()
+        if book == WHOLE_FIXTURE:
+            try:
+                for table in ("fact_arbitrage_signal", "fact_ev_signal"):
+                    found = raw.execute(
+                        f"DELETE FROM core.{table} WHERE event_id = ?", [event_id]
+                    ).fetchall()
+                    removed += int(found[0][0]) if found and found[0] else 0
+            finally:
+                raw.close()
+            log.info("review: excluded fixture %s; removed %d signals", event_id, removed)
+            return removed
         try:
             rows = raw.execute(
                 "SELECT signal_key, legs::VARCHAR FROM core.fact_arbitrage_signal "
