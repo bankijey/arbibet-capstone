@@ -164,6 +164,38 @@ real bet was placed on one before this existed.
   no EV anywhere: hot loop, price history, tracking, dbt, publish, Telegram.
   Its stored signals are removed, and the decision is recorded with who made it.
 
+### Settlement
+
+How a signal, a slip leg or a wallet bet gets its result:
+
+1. The API-Football ingestor stores match payloads in Postgres.
+2. The cold loop (daily, 06:00 Berlin) runs `spark/flatten.py` over payloads
+   ingested in the last three days; matches marked FT, AET or PEN become two
+   rows each in `fact_team_match`.
+3. `spark/settle.py` runs the vendored settlement engine over them into
+   `fact_team_market_result`: one verdict per team, market family, period and
+   line. It is configured for five families (1x2, double chance, both teams to
+   score, total goals at 0.5-4.5, draw no bet), full match only, because every
+   family across 157,000 fixtures would be 66 million rows.
+4. dbt joins results to EV signals (`gold_ev_settled`) and slip legs; the warm
+   loop settles Telegram wallet bets from the same table, all legs at once.
+
+Measured on 19 September 2026 (fixtures kicked off at least three hours earlier):
+
+| Why a row has no result | EV signals (495) | Slip legs (31,118) |
+|---|---|---|
+| Settled | 40% | 74% |
+| Market family or period not configured (Asian handicap, halves, team totals, correct score, corners) | 42% | 12% |
+| Fixture never matched to API-Football, or aged out of `dim_fixture` | 10% | 5% |
+| Match result not in the warehouse yet (next morning's run), postponed, or not covered | 7% | 3% |
+| Market outside the settlement taxonomy (book-specific specials) | 1% | 4% |
+| Goal line above 4.5 | 0% | 1% |
+
+Results arrive once a day, so a match finishing at 22:00 settles about seven
+hours later and one finishing after 06:00 waits for the next morning. Of
+fixtures with API-Football ids, 89% have a result one day after kick-off and
+about 98% after four days.
+
 ## Dashboards
 
 **Public** (<https://arbibet.streamlit.app>), reading documents in Supabase:
@@ -191,6 +223,12 @@ the same Supabase documents as the dashboard and never touch DuckDB.
   EV at or above the subscriber's threshold (default 0.015), before kick-off,
   never on a flagged leg or fixture. Sent once per market or outcome, and
   again only if the value improves by 0.005 (surebet) or 0.02 (EV).
+- **Each leg shows what its book lists.** Under every leg is the teams and
+  competition that bookmaker itself files the fixture under, marked ✅ (names
+  match the fixture), ⚠️ (they do not) or ❔ (the book names none) and linked
+  to its page, so a merged fixture shows as two different matches without
+  opening anything. For EV the same line sits under the bet and under "Fair
+  odds". A ⚠️ adds "lists a different match"; nothing is excluded by it.
 - **Wallet:** `/balance msport 50000` records cash at a book; alerts are then
   sized to it (the largest split every leg's balance allows, the binding book
   named). **Placed** records the bet; `/placed 4700 5000` corrects the stakes;
