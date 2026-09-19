@@ -36,6 +36,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
+import psycopg
+
 from arbibet_capstone import bronze, fixtures
 from arbibet_capstone.fixtures import Fixture
 from arbibet_capstone.priority import hot_work
@@ -149,6 +151,13 @@ class HotLoop(threading.Thread):
                         self.on_opportunities(fixture, snapshot, arb, ev, latest.get(event_id))
                     except Exception:
                         log.warning("opportunity hook failed", exc_info=True)
+            except psycopg.OperationalError:
+                # The connection, not the fixture: bronze restarted or the
+                # network dropped. Every remaining fixture would fail the same
+                # way (167 did, over seven minutes, after a bronze crash), so
+                # hand it to the loop's handler, which reconnects.
+                self._stats["failures"] += 1
+                raise
             except Exception:
                 # One fixture's bad payload is not the loop's problem; not
                 # advancing `seen` means the next poll retries it.
