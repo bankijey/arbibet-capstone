@@ -145,10 +145,14 @@ def sizing_lines(sizing: Any) -> list[str]:
     return lines
 
 
-def alert(opp: Opportunity, now: datetime, sizing: Any = None) -> str:
+def alert(opp: Opportunity, now: datetime, sizing: Any = None, warnings: Sequence[str] = ()) -> str:
     """`sizing` is the subscriber's suggested stakes (runner.telegram.wallet.Sizing);
-    None for a reader who has not set balances, who sees the prices and a nudge."""
+    None for a reader who has not set balances, who sees the prices and a nudge.
+    `warnings` (model.match_warnings) go directly under the fixture: reasons to
+    check the links show the same match before staking."""
     head = f"<b>{e(opp.fixture)}</b>" + (f" · {e(opp.tournament)}" if opp.tournament else "")
+    if warnings:
+        head += "\n" + "\n".join(f"⚠️ <b>Check the match:</b> {e(w)}." for w in warnings)
     kick = f"kick-off {when(opp.kickoff)} ({until(opp.kickoff, now)})"
     stakes = list(sizing.stakes) if sizing and sizing.total > 0 else None
     if opp.kind == "surebet":

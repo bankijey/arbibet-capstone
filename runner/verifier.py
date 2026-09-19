@@ -336,6 +336,17 @@ class FixtureVerifier:
                 if WHOLE_FIXTURE in checks and checks[WHOLE_FIXTURE].verdict == "mismatch"
             }
 
+    def candidates(self, event_id: str) -> dict[str, tuple[str | None, str | None]]:
+        """Books awaiting review for the fixture, with what they list: shown on alerts,
+        so the reader checks the match before staking. Informational only."""
+        with self._lock:
+            self._load()
+            return {
+                b: (c.home, c.away)
+                for b, c in self._cache.get(event_id, {}).items()
+                if c.verdict == "candidate"
+            }
+
     def book_names(self, event_id: str) -> dict[str, tuple[str | None, str | None]]:
         """What each checked book lists for the fixture, for the person deciding."""
         with self._lock:

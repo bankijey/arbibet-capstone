@@ -175,3 +175,32 @@ def outcome_names(markets_by_book: Mapping[str, Iterable[Any]]) -> dict[tuple[st
                 if outcome.name and (market.market_id, outcome.id) not in names:
                     names[(market.market_id, outcome.id)] = str(outcome.name)
     return names
+
+
+# A real surebet across public books is a percent or two. Above this, the usual
+# explanation is two different matches filed under one fixture.
+IMPLAUSIBLE_SUREBET = 1.10
+
+
+def match_warnings(
+    opp: Opportunity, candidates: Mapping[str, tuple[str | None, str | None]]
+) -> list[str]:
+    """Reasons to check the match before staking. Nothing here blocks an alert:
+    the reader decides, and can flag the fixture as a wrong match.
+
+    `candidates`: books awaiting review for this fixture, with the teams they list.
+    Only the books this opportunity actually uses are mentioned.
+    """
+    used = {leg.book for leg in opp.legs}
+    if opp.p_source:
+        used.add(opp.p_source)
+    warnings = [
+        f"{book} lists {home} v {away} under this fixture"
+        for book, (home, away) in sorted(candidates.items())
+        if book in used
+    ]
+    if opp.kind == "surebet" and opp.value > IMPLAUSIBLE_SUREBET:
+        warnings.append(
+            f"{opp.value - 1:.0%} is far above a real surebet; usually two different matches"
+        )
+    return warnings

@@ -488,11 +488,15 @@ def compact_slips(conn: Warehouse) -> int:
             if len(files) <= 1:
                 continue
             target = month / "compacted.parquet.tmp"
+            # No ORDER BY: sorting rows that each carry a slip's whole JSON
+            # payload ran DuckDB out of its 2.7 GiB cap on 66 files (11 MB on
+            # disk). Nothing depends on the order within a file -- the views
+            # pick rows by last_fetched_at -- and unsorted, the copy streams.
+            # Small row groups keep the writer's buffer small for the same reason.
             raw.execute(
                 f"COPY (SELECT * FROM read_parquet('{_parquet(month)}/*.parquet', "
-                "union_by_name = true) "
-                f"ORDER BY share_code, last_fetched_at) TO '{_parquet(target)}' "
-                "(FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9)"
+                f"union_by_name = true)) TO '{_parquet(target)}' "
+                "(FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 9, ROW_GROUP_SIZE 2048)"
             )
             final = month / f"compacted_{len(files)}_{os.getpid()}.parquet"
             target.rename(final)

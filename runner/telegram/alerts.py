@@ -32,6 +32,7 @@ from runner.telegram.model import (
     Opportunity,
     best_per_key,
     eligible,
+    match_warnings,
     outcome_names,
     recipients,
 )
@@ -121,6 +122,15 @@ class Alerter(threading.Thread):
             subscribers = self.store.subscribers()
             self._subscribers = (time.monotonic(), subscribers)
         return subscribers
+
+    def _candidates(self, event_id: str) -> dict[str, Any]:
+        try:
+            from runner.verifier import shared
+
+            return shared(self.warehouse).candidates(event_id)
+        except Exception:
+            log.warning("could not read review candidates", exc_info=True)
+            return {}
 
     def refresh_subscribers(self) -> None:
         self._subscribers = (0.0, [])
@@ -284,12 +294,15 @@ class Alerter(threading.Thread):
                 legs=tuple(replace(leg, url=links.get(leg.book)) for leg in opp.legs),
                 p_source_url=links.get(opp.p_source) if opp.p_source else None,
             )
+            warnings = match_warnings(opp, self._candidates(opp.event_id))
+            if warnings:
+                self.stats["alerts_warned"] = self.stats.get("alerts_warned", 0) + 1
             for subscriber in due:
                 try:
                     sizing = self.sizing(subscriber, opp)
                     self.api.send(
                         subscriber.chat_id,
-                        render.alert(opp, now, sizing),
+                        render.alert(opp, now, sizing, warnings),
                         self.keyboard(opp, signed=sizing is not None),
                     )
                 except TelegramError as err:

@@ -16,6 +16,7 @@ from runner.telegram.model import (
     Subscriber,
     best_per_key,
     eligible,
+    match_warnings,
     outcome_names,
     recipients,
     split_stake,
@@ -535,3 +536,24 @@ def test_warm_jobs_yield_to_the_hot_loop(monkeypatch):
     # Never waits past its cap, however long the hot loop stays busy.
     with priority.hot_work():
         assert priority.yield_to_hot(max_wait=0.1) < 0.5
+
+
+def test_alerts_warn_about_a_book_awaiting_review_and_implausible_surebets():
+    jeddah = surebet(1.2651, books=("bet9ja", "sportybet"))
+    candidates = {
+        "bet9ja": ("Jerash Club", "Sahl Horan SC"),
+        "ilotbet": ("Someone", "Else"),  # not a leg of this opportunity
+    }
+    warnings = match_warnings(jeddah, candidates)
+    assert warnings[0] == "bet9ja lists Jerash Club v Sahl Horan SC under this fixture"
+    assert len(warnings) == 2 and "far above a real surebet" in warnings[1]
+    text = render.alert(jeddah, NOW, None, warnings)
+    assert "⚠️ <b>Check the match:</b> bet9ja lists Jerash Club v Sahl Horan SC" in text
+    assert _balanced(text)
+    # An ordinary surebet on reviewed books carries nothing.
+    assert match_warnings(surebet(1.02), {}) == []
+    assert "Check the match" not in render.alert(surebet(1.02), NOW, None, [])
+    # EV: the probability's source book counts as used.
+    assert match_warnings(ev(0.03), {"sportybet": ("X", "Y")}) == [
+        "sportybet lists X v Y under this fixture"
+    ]
