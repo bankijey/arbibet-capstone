@@ -25,6 +25,33 @@ EV_STEP = 0.02
 
 
 @dataclass(frozen=True)
+class Listing:
+    """What a book itself lists under the fixture: the reader's check that every
+    leg is the same match. `status`: ok (its teams match the fixture's), check
+    (they do not, or only partly), unknown (the book names no teams)."""
+
+    home: str | None
+    away: str | None
+    tournament: str | None
+    status: str
+
+    @property
+    def text(self) -> str | None:
+        if not (self.home and self.away):
+            return None
+        match = f"{self.home} v {self.away}"
+        return f"{match} · {self.tournament}" if self.tournament else match
+
+
+def listing(
+    home: str | None, away: str | None, tournament: str | None, verdict: str | None
+) -> Listing:
+    if not (home and away):
+        return Listing(home, away, tournament, "unknown")
+    return Listing(home, away, tournament, "ok" if verdict in ("ok", "cleared") else "check")
+
+
+@dataclass(frozen=True)
 class Leg:
     outcome: str
     book: str
@@ -32,6 +59,7 @@ class Leg:
     url: str | None = None
     # The betradar outcome id, so a placed leg can be settled.
     outcome_id: str | None = None
+    listing: Listing | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +80,8 @@ class Opportunity:
     # The fixture's page at the book the probability came from: what the
     # reader opens to see the number the EV was measured against.
     p_source_url: str | None = None
+    # What the probability's source book lists under the fixture.
+    p_listing: Listing | None = None
     outcome_id: str | None = None
 
     @property
@@ -182,25 +212,20 @@ def outcome_names(markets_by_book: Mapping[str, Iterable[Any]]) -> dict[tuple[st
 IMPLAUSIBLE_SUREBET = 1.10
 
 
-def match_warnings(
-    opp: Opportunity, candidates: Mapping[str, tuple[str | None, str | None]]
-) -> list[str]:
-    """Reasons to check the match before staking. Nothing here blocks an alert:
-    the reader decides, and can flag the fixture as a wrong match.
-
-    `candidates`: books awaiting review for this fixture, with the teams they list.
-    Only the books this opportunity actually uses are mentioned.
-    """
-    used = {leg.book for leg in opp.legs}
-    if opp.p_source:
-        used.add(opp.p_source)
-    warnings = [
-        f"{book} lists {home} v {away} under this fixture"
-        for book, (home, away) in sorted(candidates.items())
-        if book in used
-    ]
+def match_warnings(opp: Opportunity) -> list[str]:
+    """Reasons to doubt the match, from what each book lists. Nothing here blocks
+    an alert: the reader decides, and can flag the fixture as a wrong match."""
+    doubtful = [leg.book for leg in opp.legs if leg.listing and leg.listing.status == "check"]
+    if opp.p_listing and opp.p_listing.status == "check" and opp.p_source not in doubtful:
+        doubtful.append(str(opp.p_source))
+    warnings = []
+    if doubtful:
+        books = " and ".join(sorted(set(doubtful)))
+        verb = "list" if len(set(doubtful)) > 1 else "lists"
+        tail = "Probably not a surebet." if opp.kind == "surebet" else "The edge may not be real."
+        warnings.append(f"{books} {verb} a different match. {tail}")
     if opp.kind == "surebet" and opp.value > IMPLAUSIBLE_SUREBET:
         warnings.append(
-            f"{opp.value - 1:.0%} is far above a real surebet; usually two different matches"
+            f"{opp.value - 1:.0%} is far above a real surebet; usually two different matches."
         )
     return warnings

@@ -307,7 +307,12 @@ class Bot(threading.Thread):
             ],
         ]
         self.reply(
-            chat_id, render.surebet_card(card, index, len(cards), stake, now), keyboard, message_id
+            chat_id,
+            render.surebet_card(
+                card, index, len(cards), stake, now, self._listings(card["eventId"])
+            ),
+            keyboard,
+            message_id,
         )
 
     @staticmethod
@@ -419,6 +424,17 @@ class Bot(threading.Thread):
     # links and sees different matches can say so: the fixture then yields no
     # arbitrage and no EV for anyone, its stored signals are removed, and the
     # decision shows on the local review dashboard, where it can be reversed.
+
+    def _listings(self, event_id: str) -> dict[str, Any]:
+        """book -> what it lists under the fixture. Empty when it cannot be read."""
+        from runner.telegram.model import listing
+
+        try:
+            found = self._verifier().listings(event_id)
+        except Exception:
+            log.warning("could not read book listings", exc_info=True)
+            return {}
+        return {book: listing(*row) for book, row in found.items()}
 
     def _verifier(self) -> Any:
         from runner.verifier import shared
@@ -600,8 +616,12 @@ class Bot(threading.Thread):
                 nav.append(button("Next ▶", self.callbacks.put("ev", threshold, start + EV_PAGE)))
             if nav:
                 keyboard.append(nav)
+        listings = {row["eventId"]: self._listings(row["eventId"]) for row in page}
         self.reply(
-            chat_id, render.ev_page(rows, start, EV_PAGE, threshold, now), keyboard, message_id
+            chat_id,
+            render.ev_page(rows, start, EV_PAGE, threshold, now, listings),
+            keyboard,
+            message_id,
         )
 
     # --- slips ------------------------------------------------------------------------------

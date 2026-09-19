@@ -137,8 +137,8 @@ def test_bet_row_and_alert_rendering_by_access():
         [2.10, 1.98], ["livescorebet", "msport"], {"livescorebet": 4_700, "msport": 50_000}, 100_000
     )
     signed = render.alert(opp, NOW, sizing)
-    assert "stake <b>4,700.00</b>" in signed and "limited by your livescorebet" in signed
-    assert "returns <b>" in signed
+    assert "stake <b>4,700</b>" in signed and "limited by your livescorebet" in signed
+    assert "💰 Stake 9,6" in signed and "whatever wins (+" in signed
     text = render.bet_summary({**row, "status": "open", "kickoff_at": opp.kickoff})
     assert "locks in" in text
     wallet = render.wallet(

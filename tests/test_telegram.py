@@ -12,10 +12,12 @@ from runner.telegram.bot import Callbacks, parse_float
 from runner.telegram.model import (
     Ledger,
     Leg,
+    Listing,
     Opportunity,
     Subscriber,
     best_per_key,
     eligible,
+    listing,
     match_warnings,
     outcome_names,
     recipients,
@@ -186,22 +188,38 @@ def test_surebet_alert_escapes_and_shows_the_split():
     assert _balanced(text)
 
 
-def test_ev_alert_shows_probability_and_fair_odds():
-    text = render.alert(ev(0.034), NOW, size_ev(0.034, 2.2, "msport", {"msport": 50}, 50, 50))
-    assert "EV +3.40%" in text
-    # No link known: the source book is named beside the fair odds.
-    assert "fair odds 2.13 (sportybet)" in text
-    assert _balanced(text)
-    # With the source's page: "fair odds" IS the link, and the book name is gone.
+def test_ev_alert_shows_both_books_listings_and_plain_fair_odds():
     from dataclasses import replace
 
-    linked = render.alert(
-        replace(ev(0.034), p_source_url="https://www.sportybet.com/ng/sport/x?a=1&b=2"),
-        NOW,
-        None,
+    base = ev(0.034)
+    bet_leg = replace(
+        base.legs[0],
+        url="https://www.msport.com/x?a=1&b=2",
+        listing=Listing("Arsenal", "Chelsea", "England Premier League", "ok"),
     )
-    assert '<a href="https://www.sportybet.com/ng/sport/x?a=1&amp;b=2">fair odds 2.13</a>' in linked
-    assert "(sportybet)" not in linked and _balanced(linked)
+    opp = replace(
+        base,
+        legs=(bet_leg,),
+        p_source_url="https://www.sportybet.com/y",
+        p_listing=Listing("Arsenal FC", "Chelsea FC", "Premier League", "ok"),
+    )
+    text = render.alert(opp, NOW, size_ev(0.034, 2.2, "msport", {"msport": 50}, 50, 50))
+    assert "📈 <b>EV +3.40%</b>" in text and "🎯 Bet: home @ <b>2.20</b> · msport" in text
+    # Fair odds is plain text; each book's LISTING is the link.
+    assert "⚖️ Fair odds <b>2.13</b>" in text and ">fair odds" not in text
+    assert "(sportybet)" not in text and "Probability" not in text
+    assert (
+        '✅ <a href="https://www.msport.com/x?a=1&amp;b=2">Arsenal v Chelsea · '
+        "England Premier League</a>" in text
+    )
+    assert (
+        '✅ <a href="https://www.sportybet.com/y">Arsenal FC v Chelsea FC · Premier League</a>'
+        in text
+    )
+    assert _balanced(text)
+    # A book that names no teams still gets a link, marked unknown.
+    bare = render.alert(replace(base, p_source_url="https://s.example/e"), NOW, None)
+    assert '❔ <a href="https://s.example/e">open on sportybet</a>' in bare
 
 
 def test_clip_stays_under_the_limit_and_cuts_at_a_line():
@@ -301,11 +319,14 @@ def test_ev_list_is_fresh_upcoming_and_above_threshold():
     assert [r["ev"] for r in rows] == [0.034, 0.02]
     page = render.ev_page(rows, 0, 5, 0.015, NOW)
     assert "1–2 of 2" in page and _balanced(page)
-    assert "fair odds 2.13 (sportybet)" in page
+    assert "⚖️ Fair odds <b>2.13</b> · ❔ open on sportybet" in page
     rows[0]["comparableUrl"] = "https://m.example/e"
-    assert '<a href="https://m.example/e">fair odds 2.13</a>' in render.ev_page(
-        rows, 0, 5, 0.015, NOW
+    listings = {"e1": {"sportybet": Listing("A FC", "B FC", "Liga", "ok")}}
+    page = render.ev_page(rows, 0, 5, 0.015, NOW, listings)
+    assert (
+        '⚖️ Fair odds <b>2.13</b> · ✅ <a href="https://m.example/e">A FC v B FC · Liga</a>' in page
     )
+    assert "🎯 ❔ open on msport" in page and _balanced(page)
     assert "No upcoming EV" in render.ev_page([], 0, 5, 0.1, NOW)
 
 
@@ -538,22 +559,44 @@ def test_warm_jobs_yield_to_the_hot_loop(monkeypatch):
         assert priority.yield_to_hot(max_wait=0.1) < 0.5
 
 
-def test_alerts_warn_about_a_book_awaiting_review_and_implausible_surebets():
-    jeddah = surebet(1.2651, books=("bet9ja", "sportybet"))
-    candidates = {
-        "bet9ja": ("Jerash Club", "Sahl Horan SC"),
-        "ilotbet": ("Someone", "Else"),  # not a leg of this opportunity
-    }
-    warnings = match_warnings(jeddah, candidates)
-    assert warnings[0] == "bet9ja lists Jerash Club v Sahl Horan SC under this fixture"
-    assert len(warnings) == 2 and "far above a real surebet" in warnings[1]
-    text = render.alert(jeddah, NOW, None, warnings)
-    assert "⚠️ <b>Check the match:</b> bet9ja lists Jerash Club v Sahl Horan SC" in text
+def test_a_merged_fixture_shows_itself_in_the_alert():
+    from dataclasses import replace
+
+    base = surebet(1.0191, books=("livescorebet", "msport"))
+    legs = (
+        replace(
+            base.legs[0],
+            listing=listing("Levski Sofia", "Ludogorets Razgrad", "Bulgaria First League", "ok"),
+        ),
+        replace(
+            base.legs[1],
+            url="https://www.msport.com/e",
+            listing=listing(
+                "SFC Etar Veliko Tarnovo", "PFC Chernomorets Burgas", "Vtora Liga", "candidate"
+            ),
+        ),
+    )
+    opp = replace(base, legs=legs)
+    warnings = match_warnings(opp)
+    assert warnings == ["msport lists a different match. Probably not a surebet."]
+    text = render.alert(opp, NOW, None, warnings)
+    assert "1️⃣ over @ <b>2.10</b> · livescorebet" in text
+    assert "✅ <a href=" in text and "Levski Sofia v Ludogorets Razgrad" in text
+    assert (
+        '⚠️ <a href="https://www.msport.com/e">SFC Etar Veliko Tarnovo v PFC Chernomorets '
+        "Burgas · Vtora Liga</a>" in text
+    )
+    assert "⚠️ <b>msport lists a different match. Probably not a surebet.</b>" in text
     assert _balanced(text)
-    # An ordinary surebet on reviewed books carries nothing.
-    assert match_warnings(surebet(1.02), {}) == []
-    assert "Check the match" not in render.alert(surebet(1.02), NOW, None, [])
-    # EV: the probability's source book counts as used.
-    assert match_warnings(ev(0.03), {"sportybet": ("X", "Y")}) == [
-        "sportybet lists X v Y under this fixture"
+    # Status: ok/cleared match, anything else is "check", no names is "unknown".
+    assert listing("A", "B", None, "cleared").status == "ok"
+    assert listing("A", "B", None, "unverified").status == "check"
+    assert listing(None, None, "X", "ok").status == "unknown"
+    # An implausibly large surebet is called out even when the names agree.
+    assert "far above a real surebet" in match_warnings(surebet(1.2651))[0]
+    assert match_warnings(surebet(1.02)) == []
+    # EV: the probability's source book counts too.
+    doubtful = replace(ev(0.03), p_listing=listing("X", "Y", None, "candidate"))
+    assert match_warnings(doubtful) == [
+        "sportybet lists a different match. The edge may not be real."
     ]

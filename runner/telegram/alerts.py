@@ -29,9 +29,11 @@ from runner.telegram.api import TelegramAPI, TelegramError
 from runner.telegram.model import (
     Ledger,
     Leg,
+    Listing,
     Opportunity,
     best_per_key,
     eligible,
+    listing,
     match_warnings,
     outcome_names,
     recipients,
@@ -123,13 +125,17 @@ class Alerter(threading.Thread):
             self._subscribers = (time.monotonic(), subscribers)
         return subscribers
 
-    def _candidates(self, event_id: str) -> dict[str, Any]:
+    def _listings(self, event_id: str) -> dict[str, Listing]:
+        """What each book lists under the fixture (runner/verifier.py). Never raises."""
         try:
             from runner.verifier import shared
 
-            return shared(self.warehouse).candidates(event_id)
+            return {
+                book: listing(*found)
+                for book, found in shared(self.warehouse).listings(event_id).items()
+            }
         except Exception:
-            log.warning("could not read review candidates", exc_info=True)
+            log.warning("could not read book listings", exc_info=True)
             return {}
 
     def refresh_subscribers(self) -> None:
@@ -289,12 +295,17 @@ class Alerter(threading.Thread):
                 continue
             if links is None:
                 links = self._links(opp.event_id)
+            listed = self._listings(opp.event_id)
             opp = replace(
                 opp,
-                legs=tuple(replace(leg, url=links.get(leg.book)) for leg in opp.legs),
+                legs=tuple(
+                    replace(leg, url=links.get(leg.book), listing=listed.get(leg.book))
+                    for leg in opp.legs
+                ),
                 p_source_url=links.get(opp.p_source) if opp.p_source else None,
+                p_listing=listed.get(opp.p_source) if opp.p_source else None,
             )
-            warnings = match_warnings(opp, self._candidates(opp.event_id))
+            warnings = match_warnings(opp)
             if warnings:
                 self.stats["alerts_warned"] = self.stats.get("alerts_warned", 0) + 1
             for subscriber in due:

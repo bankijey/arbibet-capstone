@@ -145,70 +145,101 @@ def sizing_lines(sizing: Any) -> list[str]:
     return lines
 
 
+NUMBERS = ("1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣")
+STATUS = {"ok": "✅", "check": "⚠️", "unknown": "❔"}
+INDENT = "      "
+
+
+def amount(value: float) -> str:
+    """Money as it is read at a glance: whole units once it is in the thousands."""
+    return f"{value:,.0f}" if abs(value) >= 1000 else f"{value:,.2f}"
+
+
+def listing_inline(found: Any, url: str | None, book: str) -> str:
+    """What the book itself lists under the fixture, linked to its page: the
+    reader's check that this leg is the same match, without opening anything."""
+    if found is None or not found.text:
+        return f"❔ {link(url, f'open on {book}')}"
+    return f"{STATUS.get(found.status, '❔')} {link(url, found.text)}"
+
+
+def listing_line(found: Any, url: str | None, book: str) -> str:
+    return INDENT + listing_inline(found, url, book)
+
+
+def _fixture_block(opp: Opportunity, now: datetime) -> list[str]:
+    lines = ["", f"⚽ <b>{e(opp.fixture)}</b>"]
+    if opp.tournament:
+        lines.append(f"🏆 {e(opp.tournament)}")
+    lines += [f"🕒 {when(opp.kickoff)} ({until(opp.kickoff, now)})", f"📊 {e(opp.market)}"]
+    return lines
+
+
 def alert(opp: Opportunity, now: datetime, sizing: Any = None, warnings: Sequence[str] = ()) -> str:
     """`sizing` is the subscriber's suggested stakes (runner.telegram.wallet.Sizing);
     None for a reader who has not set balances, who sees the prices and a nudge.
-    `warnings` (model.match_warnings) go directly under the fixture: reasons to
-    check the links show the same match before staking."""
-    head = f"<b>{e(opp.fixture)}</b>" + (f" · {e(opp.tournament)}" if opp.tournament else "")
-    if warnings:
-        head += "\n" + "\n".join(f"⚠️ <b>Check the match:</b> {e(w)}." for w in warnings)
-    kick = f"kick-off {when(opp.kickoff)} ({until(opp.kickoff, now)})"
+
+    Under every leg is what THAT BOOK lists for the fixture -- its teams and its
+    competition -- linked to its page, so a merged fixture shows itself as two
+    different matches. `warnings` (model.match_warnings) say so in words."""
     stakes = list(sizing.stakes) if sizing and sizing.total > 0 else None
     if opp.kind == "surebet":
-        lines = [
-            f"🟢 <b>SUREBET {opp.value:.4f}</b> · {pct(opp.value - 1)} guaranteed",
-            head,
-            f"{e(opp.market)} · {kick}",
-            "",
-        ]
+        lines = [f"🟢 <b>SUREBET {opp.value:.4f}</b> · {pct(opp.value - 1)} guaranteed"]
+        lines += _fixture_block(opp, now)
+        lines.append("")
         for i, leg in enumerate(opp.legs):
-            share = f" · stake <b>{money(stakes[i])}</b>" if stakes else ""
+            share = f" · stake <b>{amount(stakes[i])}</b>" if stakes else ""
+            number = NUMBERS[i] if i < len(NUMBERS) else "•"
             lines.append(
-                f"• {e(leg.outcome)} @ <b>{leg.odds:.2f}</b> {link(leg.url, leg.book)}{share}"
+                f"{number} {e(leg.outcome)} @ <b>{leg.odds:.2f}</b> · {e(leg.book)}{share}"
             )
+            lines.append(listing_line(leg.listing, leg.url, leg.book))
+        lines.append("")
+        lines += [f"⚠️ <b>{e(w)}</b>" for w in warnings]
         if stakes:
             total = sum(stakes)
             returns = total * opp.value
-            lines += [
-                "",
-                f"Stake {money(total)} returns <b>{money(returns)}</b> whatever wins "
-                f"({money(returns - total)} profit).",
-                *sizing_lines(sizing),
-            ]
+            lines.append(
+                f"💰 Stake {amount(total)} → returns <b>{amount(returns)}</b> whatever wins "
+                f"(+{amount(returns - total)})"
+            )
+            lines += sizing_lines(sizing)
         elif sizing is None:
-            lines += ["", NUDGE]
+            lines.append(NUDGE)
         else:
-            lines += ["", *sizing_lines(sizing)]
+            lines += sizing_lines(sizing)
         if opp.spread_seconds is not None:
             lines.append(
-                f"<i>Legs priced {opp.spread_seconds}s apart. Check every price on the site "
-                "before staking.</i>"
+                f"⏱ <i>Legs priced {opp.spread_seconds}s apart · check each price before "
+                "staking</i>"
             )
         return clip("\n".join(lines))
 
     leg = opp.legs[0]
-    lines = [
-        f"📈 <b>EV {pct(opp.value)}</b> · {e(leg.outcome)} @ <b>{leg.odds:.2f}</b> "
-        f"{link(leg.url, leg.book)}",
-        head,
-        f"{e(opp.market)} · {kick}",
+    lines = [f"📈 <b>EV {pct(opp.value)}</b>"]
+    lines += _fixture_block(opp, now)
+    lines[-1] += f" · {e(leg.outcome)}"
+    share = f" · stake <b>{amount(stakes[0])}</b>" if stakes else ""
+    lines += [
+        "",
+        f"🎯 Bet: {e(leg.outcome)} @ <b>{leg.odds:.2f}</b> · {e(leg.book)}{share}",
+        listing_line(leg.listing, leg.url, leg.book),
     ]
     if opp.probability:
-        lines.append(
-            f"Probability {opp.probability:.1%} → "
-            + fair_odds(opp.probability, opp.p_source, opp.p_source_url)
-        )
+        lines += [
+            f"⚖️ Fair odds <b>{1 / opp.probability:.2f}</b>",
+            listing_line(opp.p_listing, opp.p_source_url, str(opp.p_source or "the source book")),
+        ]
+    lines.append("")
+    lines += [f"⚠️ <b>{e(w)}</b>" for w in warnings]
     if stakes:
-        lines.append(
-            f"Suggested stake <b>{money(stakes[0])}</b> (a quarter of Kelly on your "
-            f"{e(leg.book)} balance)"
-        )
         lines += sizing_lines(sizing)
     elif sizing is None:
         lines.append(NUDGE)
     else:
         lines += sizing_lines(sizing)
+    while lines and lines[-1] == "":
+        lines.pop()
     return clip("\n".join(lines))
 
 
@@ -336,7 +367,14 @@ def _offered(item: dict[str, Any]) -> str:
     return ""
 
 
-def surebet_card(card: dict[str, Any], index: int, total: int, stake: float, now: datetime) -> str:
+def surebet_card(
+    card: dict[str, Any],
+    index: int,
+    total: int,
+    stake: float,
+    now: datetime,
+    listings: Any = None,
+) -> str:
     split = split_stake([leg["odds"] for leg in card["legs"]], stake)
     if not card["tracked"]:
         now_text = "not tracked yet"
@@ -358,10 +396,12 @@ def surebet_card(card: dict[str, Any], index: int, total: int, stake: float, now
     ]
     for i, leg in enumerate(card["legs"]):
         share = f" · stake {money(split['stakes'][i])}" if split else ""
+        number = NUMBERS[i] if i < len(NUMBERS) else "•"
         lines.append(
-            f"• {e(leg['outcome'])} @ <b>{leg['odds']:.2f}</b> {link(leg['url'], leg['book'])}"
+            f"{number} {e(leg['outcome'])} @ <b>{leg['odds']:.2f}</b> · {e(leg['book'])}"
             f"{share}{_offered(leg)}"
         )
+        lines.append(listing_line((listings or {}).get(leg["book"]), leg["url"], leg["book"]))
     if split:
         lines.append(
             f"\nStake {money(stake)} returns {money(split['returns'])} "
@@ -432,25 +472,39 @@ def ev_rows(
 
 
 def ev_page(
-    rows: Sequence[dict[str, Any]], start: int, size: int, threshold: float, now: datetime
+    rows: Sequence[dict[str, Any]],
+    start: int,
+    size: int,
+    threshold: float,
+    now: datetime,
+    listings: Any = None,
 ) -> str:
+    """`listings`: event_id -> book -> Listing, so each row shows what the bet's book
+    and the probability's source book list under the fixture, linked to their pages."""
     total = len(rows)
     if not total:
         return f"📈 No upcoming EV of {threshold:.3f} or more right now."
     lines = [
         f"📈 <b>Upcoming EV ≥ {threshold:.3f}</b> · {start + 1}–{min(start + size, total)} "
         f"of {total}",
-        "",
     ]
     for n, r in enumerate(rows[start : start + size], start=1):
+        listed = (listings or {}).get(r["eventId"], {})
+        number = NUMBERS[n - 1] if n <= len(NUMBERS) else f"{n}."
         lines += [
-            f"<b>{n}. EV {pct(r['ev'])}</b> · {e(r['outcome'])} @ <b>{r['odds']:.2f}</b> "
-            f"{link(r.get('url'), r['book'])}{_offered(r)}",
-            f"    {e(r['fixture'])} · {e(market_label(r['market'], r.get('line')))}",
-            f"    p {r['impliedP']:.1%} → "
-            f"{fair_odds(r['impliedP'], r.get('comparable'), r.get('comparableUrl'))} · kick-off "
-            f"{when(r['kickoffAt'])} ({until(r['kickoffAt'], now)})",
+            "",
+            f"{number} <b>EV {pct(r['ev'])}</b> · {e(r['outcome'])} @ <b>{r['odds']:.2f}</b> · "
+            f"{e(r['book'])}{_offered(r)}",
+            f"{INDENT}⚽ {e(r['fixture'])} · {e(market_label(r['market'], r.get('line')))}",
+            f"{INDENT}🕒 {when(r['kickoffAt'])} ({until(r['kickoffAt'], now)})",
+            f"{INDENT}🎯 {listing_inline(listed.get(r['book']), r.get('url'), r['book'])}",
         ]
+        if r.get("impliedP"):
+            source = str(r.get("comparable") or "the source book")
+            lines.append(
+                f"{INDENT}⚖️ Fair odds <b>{1 / r['impliedP']:.2f}</b> · "
+                f"{listing_inline(listed.get(source), r.get('comparableUrl'), source)}"
+            )
     return clip("\n".join(lines))
 
 

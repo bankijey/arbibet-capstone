@@ -73,6 +73,7 @@ class FixtureVerifier:
         self._cache: dict[str, dict[str, Check]] = {}
         self._checked: dict[tuple[str, str], datetime] = {}
         self._fixtures: dict[str, dict[str, Any]] = {}
+        self._tournaments: dict[str, dict[str, str]] = {}
         self._loaded = False
         self._decisions_seen = 0.0
         # Called after a whole-fixture flag changes, so serving is republished at once.
@@ -188,6 +189,8 @@ class FixtureVerifier:
                 self._cache.setdefault(event_id, {}).update({c.bookmaker: c for c in changed})
                 for c in changed:
                     self._checked[(event_id, c.bookmaker)] = now
+            if fixture.book_tournaments:
+                self._tournaments[event_id] = dict(fixture.book_tournaments)
             self._fixtures[event_id] = {
                 "fixture": f"{fixture.home_team} v {fixture.away_team}",
                 "tournament": fixture.tournament,
@@ -345,6 +348,18 @@ class FixtureVerifier:
                 b: (c.home, c.away)
                 for b, c in self._cache.get(event_id, {}).items()
                 if c.verdict == "candidate"
+            }
+
+    def listings(self, event_id: str) -> dict[str, tuple[str | None, str | None, str | None, str]]:
+        """book -> (home, away, tournament, verdict): what each book lists under the
+        fixture, shown on alerts so the reader can see a wrong match without opening it."""
+        with self._lock:
+            self._load()
+            tournaments = self._tournaments.get(event_id, {})
+            return {
+                b: (c.home, c.away, tournaments.get(b), c.verdict)
+                for b, c in self._cache.get(event_id, {}).items()
+                if b != WHOLE_FIXTURE
             }
 
     def book_names(self, event_id: str) -> dict[str, tuple[str | None, str | None]]:

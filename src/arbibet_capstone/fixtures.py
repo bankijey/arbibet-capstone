@@ -59,6 +59,9 @@ class Fixture(NamedTuple):
     # (arbibet_capstone.verify). Defaulted so callers that build a Fixture by
     # hand (arbitrage_track) need not know about it.
     book_names: dict[str, tuple[str, str]] | None = None
+    # ...and the competition each book files it under ("Vtora Liga;Bulgaria"),
+    # shown on alerts beside the book's teams so a wrong match is visible.
+    book_tournaments: dict[str, str] | None = None
 
 
 # The lateral picks the apifootball leg out of the JSONB array; the LEFT JOIN
@@ -124,7 +127,11 @@ def upcoming(
     with conn.cursor() as cur:
         cur.execute(_UPCOMING, (sport_key, since, until))
         return [
-            Fixture(*row[:9], book_names=_book_names(row[9]) if len(row) > 9 else None)
+            Fixture(
+                *row[:9],
+                book_names=_book_names(row[9]) if len(row) > 9 else None,
+                book_tournaments=_book_tournaments(row[9]) if len(row) > 9 else None,
+            )
             for row in cur
         ]
 
@@ -139,6 +146,17 @@ def _book_names(legs: Any) -> dict[str, tuple[str, str]]:
         if book and home and away and book not in names:
             names[book] = (str(home), str(away))
     return names
+
+
+def _book_tournaments(legs: Any) -> dict[str, str]:
+    """Our books' competition names from the matcher's legs: "Vtora Liga, Bulgaria"."""
+    found: dict[str, str] = {}
+    for leg in legs or []:
+        book = _LINK_BOOKS.get(str(leg.get("e_id", "")).split(";", 1)[0])
+        tournament = leg.get("tournament")
+        if book and tournament and book not in found:
+            found[book] = ", ".join(part.strip() for part in str(tournament).split(";") if part)
+    return found
 
 
 # The matcher's source prefixes differ from our bookmaker names for two books.
