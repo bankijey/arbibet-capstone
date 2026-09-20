@@ -13,6 +13,8 @@ WARM (every 15 minutes, in order):
     extract_ticks      price history for signalled/slipped fixtures
     track_arbitrage    where each surebet market stands now
     live_state         match status; are signal legs still offered
+    settle_fast        pass 1 of settlement: msport's final score, minutes after
+                       full time, for every market something asked about
     dbt_run            staging and gold models
     brief_fixtures     pre-match AI briefs, when their evidence moved
     summarise_upcoming AI slip verdicts, 60 per run
@@ -271,6 +273,7 @@ def warm_jobs(warehouse: Warehouse) -> list[Job]:
         Job("extract_ticks", script("odds/ticks.py", returns_rows=True)),
         Job("track_arbitrage", script("odds/arbitrage_track.py")),
         Job("live_state", script("odds/live_state.py")),
+        Job("settle_fast", script("odds/settle_fast.py", returns_rows=True)),
         Job("dbt_run", dbt("run")),
         Job("brief_fixtures", script("enrich/fixture_summary.py")),
         Job(

@@ -166,7 +166,20 @@ real bet was placed on one before this existed.
 
 ### Settlement
 
-How a signal, a slip leg or a wallet bet gets its result:
+Two passes. **Pass 1, minutes after full time** (`odds/settle_fast.py`, every
+warm cycle): neither collector records a finished match (markets bronze stops
+at kick-off; the live collector follows a few competitions), but msport's
+match-detail endpoint keeps answering with `Ended`, the final score and the
+half-time score. For every fixture that an EV signal, surebet leg, slip leg or
+wallet bet refers to, that score is fetched once and the vendored engine
+settles exactly the markets asked about, any family, period or line a
+scoreline decides, into `fact_outcome_result` as `provisional`. It refuses
+rather than guesses: only `Ended`, only normal-time matches, only when the
+match check accepts msport's teams as the fixture's, never a flagged fixture.
+**Pass 2, daily** (below) is API-Football; where both have a verdict,
+API-Football's is used.
+
+How pass 2 gives a signal, a slip leg or a wallet bet its result:
 
 1. The API-Football ingestor stores match payloads in Postgres.
 2. The cold loop (daily, 06:00 Berlin) runs `spark/flatten.py` over payloads

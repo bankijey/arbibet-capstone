@@ -148,7 +148,9 @@ select
     -- PRIMARY team's row, which carries the fixture-level verdict; the other
     -- team's row is mirrored, and reading it said "away won" about a 0-0 draw
     -- (FINDINGS 13c). `dim_market_outcome.primary_team` says which row.
-    v.verdict                                           as resolution
+    -- ...or, until API-Football has it, pass 1's verdict from the book's own
+    -- final score (odds/settle_fast.py).
+    coalesce(v.verdict, p.verdict)                      as resolution
 
 from leg l
 left join {{ source('core', 'fact_team_market_result') }} v
@@ -157,5 +159,10 @@ left join {{ source('core', 'fact_team_market_result') }} v
       and v.market_family = l.market_family
       and v.period        = l.period
       and v.side_or_line  = l.side_or_line
+left join {{ source('core', 'fact_outcome_result') }} p
+       on p.event_id      = l.event_id
+      and p.market_family = l.market_family
+      and p.period        = l.period
+      and p.side_or_line  = l.side_or_line
 left join form h on h.share_code = l.share_code and h.leg_index = l.leg_index and h.team_role = 'home'
 left join form a on a.share_code = l.share_code and a.leg_index = l.leg_index and a.team_role = 'away'

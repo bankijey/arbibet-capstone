@@ -184,6 +184,44 @@ CREATE TABLE IF NOT EXISTS fact_leg_availability (
 
 );
 
+-- Pass 1 of settlement (odds/settle_fast.py): what a book itself says about a
+-- finished match, fetched minutes after full time. Key: (event_id, source).
+CREATE TABLE IF NOT EXISTS fact_event_result (
+    event_id    VARCHAR(36) NOT NULL,
+    source      VARCHAR     NOT NULL,      -- msport
+    status      VARCHAR     NOT NULL,      -- ended | cancelled | postponed | live | ...
+    raw_status  VARCHAR,
+    home_ft     INTEGER,
+    away_ft     INTEGER,
+    home_ht     INTEGER,
+    away_ht     INTEGER,
+    sections    INTEGER,                   -- completed sections; 1 = a normal-time match
+    book_home   VARCHAR,
+    book_away   VARCHAR,
+    names_ok    BOOLEAN,                   -- the book's teams are the fixture's
+    payload     JSON,
+    fetched_at  TIMESTAMPTZ NOT NULL
+
+);
+
+-- A fixture-level verdict for one demanded outcome, in the settlement engine's
+-- terms. `stage`: provisional (pass 1, a book's score) until API-Football
+-- confirms or corrects it. Key: (event_id, market_family, period, side_or_line).
+CREATE TABLE IF NOT EXISTS fact_outcome_result (
+    event_id       VARCHAR(36) NOT NULL,
+    market_family  VARCHAR     NOT NULL,
+    period         VARCHAR     NOT NULL,
+    side_or_line   VARCHAR     NOT NULL,
+    verdict        VARCHAR     NOT NULL,   -- won | lost | push | void | half_win | half_loss
+    reason         VARCHAR,
+    stage          VARCHAR     NOT NULL,   -- provisional | confirmed | corrected
+    source         VARCHAR     NOT NULL,
+    score          VARCHAR,                -- "2:1 (HT 1:0)", what it was settled on
+    settled_at     TIMESTAMPTZ NOT NULL,
+    confirmed_at   TIMESTAMPTZ
+
+);
+
 -- Whether each book's payload for a fixture names the fixture's teams
 -- (arbibet_capstone.verify). A `mismatch` book is excluded from every
 -- comparison, signal and publication for that fixture; the explanation is

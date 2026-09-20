@@ -10,6 +10,7 @@ sources:
     tables:
       - name: fact_arbitrage_signal
       - name: fixture_check
+      - name: fact_outcome_result
       - name: fact_ev_signal
       - name: fact_odds_tick
       - name: fact_team_match

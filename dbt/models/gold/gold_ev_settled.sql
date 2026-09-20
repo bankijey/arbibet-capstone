@@ -38,7 +38,10 @@ select
     ev.is_fresh,
     ev.detected_at,
     {{ platform_time('ev.kickoff_at') }}                      as kickoff_at,
-    r.verdict
+    -- API-Football's verdict when it has one; otherwise pass 1's, settled
+    -- from the book's own final score minutes after full time.
+    coalesce(r.verdict, p.verdict)                            as verdict,
+    case when r.verdict is not null then 'confirmed' else p.stage end as result_stage
 from ev
 left join {{ source('core', 'dim_market_outcome') }} o
        on o.market_id  = ev.market_base_id::varchar
@@ -49,3 +52,8 @@ left join {{ source('core', 'fact_team_market_result') }} r
       and r.market_family = o.market_family
       and r.period        = o.period
       and r.side_or_line  = if(o.has_line, o.side || '@' || ev.specifier, o.side)
+left join {{ source('core', 'fact_outcome_result') }} p
+       on p.event_id      = ev.event_id
+      and p.market_family = o.market_family
+      and p.period        = o.period
+      and p.side_or_line  = if(o.has_line, o.side || '@' || ev.specifier, o.side)

@@ -29,7 +29,7 @@ SETTLE_AFTER = timedelta(hours=2)
 GIVE_UP_AFTER = timedelta(days=7)
 
 _VERDICTS = """
-    SELECT o.outcome_id, r.verdict
+    SELECT o.outcome_id, coalesce(r.verdict, p.verdict) AS verdict
     FROM CORE.dim_fixture f
     JOIN CORE.dim_market_outcome o ON o.market_id = %s
     LEFT JOIN CORE.fact_team_market_result r
@@ -38,13 +38,18 @@ _VERDICTS = """
      AND r.market_family = o.market_family
      AND r.period        = o.period
      AND r.side_or_line  = if(o.has_line, o.side || '@' || %s, o.side)
+    LEFT JOIN CORE.fact_outcome_result p
+      ON p.event_id      = f.event_id
+     AND p.market_family = o.market_family
+     AND p.period        = o.period
+     AND p.side_or_line  = if(o.has_line, o.side || '@' || %s, o.side)
     WHERE f.event_id = %s
 """
 
 
 def verdicts(warehouse: Warehouse, event_id: str, market_id: str) -> dict[str, str]:
     base, _, specifier = market_id.partition(";")
-    frame = warehouse.query(_VERDICTS, (base, specifier or "", event_id))
+    frame = warehouse.query(_VERDICTS, (base, specifier or "", specifier or "", event_id))
     return {
         str(o): str(v)
         for o, v in zip(frame.OUTCOME_ID, frame.VERDICT, strict=True)
