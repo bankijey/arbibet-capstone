@@ -216,27 +216,31 @@ def trusted(
     result: EventResult,
     home: str | None,
     away: str | None,
-    listing: tuple[str, str | None, str | None] | None = None,
+    listings: Iterable[tuple[str, str | None, str | None]] = (),
     flagged: bool = False,
 ) -> bool:
     """Whether the score may be used for this fixture.
 
     Yes when msport names the fixture's teams. Also yes when the match check
-    (core.fixture_check) accepted msport's pre-match listing for the fixture --
-    an alias or a rebrand the name comparison cannot see, settled there by the
-    other books agreeing or by a person -- and the result names that same
-    listing. Never for a fixture flagged as a wrong match, and never on a
-    listing still awaiting review.
+    (core.fixture_check) accepted ANY book's listing for the fixture -- an alias
+    or a rebrand the name comparison cannot see, settled there by the other
+    books agreeing or by a person -- and the result names that same listing.
+    Books share feeds, so sportybet's accepted "Jakobstads Bollklubb" vouches
+    for msport's result under that name. Never for a fixture flagged as a wrong
+    match, and never on a listing still awaiting review.
 
-    `listing`: (verdict, home, away) of msport's row in fixture_check.
+    `listings`: (verdict, home, away) of the fixture's rows in fixture_check.
+    A result held back here is shown on the local dashboard, where clearing it
+    writes msport's listing as `cleared`; the next cycle settles it.
     """
     if flagged:
         return False
     if names_agree(result, home, away):
         return True
-    if listing is None or listing[0] not in ("ok", "cleared"):
-        return False
-    return names_agree(result, listing[1], listing[2])
+    return any(
+        verdict in ("ok", "cleared") and names_agree(result, listed_home, listed_away)
+        for verdict, listed_home, listed_away in listings
+    )
 
 
 def period_scores(result: EventResult) -> tuple[PeriodResolvedScores | None, str | None]:

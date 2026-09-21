@@ -110,13 +110,17 @@ def test_an_accepted_listing_vouches_for_an_alias_but_never_for_a_flagged_fixtur
     fixture = ("Asan Mugunghwa", "Cheonan City")
     assert not trusted(result, *fixture)  # the names alone do not agree
     accepted = ("ok", "Chungnam Asan FC", "Cheonan City FC")
-    assert trusted(result, *fixture, listing=accepted)
-    assert trusted(result, *fixture, listing=("cleared", *accepted[1:]))
+    assert trusted(result, *fixture, listings=[accepted])
+    assert trusted(result, *fixture, listings=[("cleared", *accepted[1:])])
     # A listing still awaiting review vouches for nothing.
-    assert not trusted(result, *fixture, listing=("candidate", *accepted[1:]))
-    assert not trusted(result, *fixture, listing=("unverified", *accepted[1:]))
+    assert not trusted(result, *fixture, listings=[("candidate", *accepted[1:])])
+    assert not trusted(result, *fixture, listings=[("unverified", *accepted[1:])])
     # The result must name the listing that was accepted, not some third match.
-    assert not trusted(result, *fixture, listing=("ok", "Seoul E-Land", "Busan IPark"))
+    assert not trusted(result, *fixture, listings=[("ok", "Seoul E-Land", "Busan IPark")])
+    # Any book's accepted listing will do: books share feeds, and names.
+    others = [("unverified", "JBK", "FF Jaro II"), ("ok", "Seoul E-Land", "Busan IPark"), accepted]
+    assert trusted(result, *fixture, listings=others)
+    assert not trusted(result, *fixture, listings=others[:2])
     # Flagged as a wrong match: never, even when the names agree.
     assert not trusted(parse_msport(_payload()), "Kallithea", "Panserraikos", flagged=True)
     assert trusted(parse_msport(_payload()), "Kallithea", "Panserraikos")

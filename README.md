@@ -180,6 +180,13 @@ or line, as `provisional`. It refuses rather than guesses: only `Ended`, only
 normal-time matches, only when the match check accepts msport's teams as the
 fixture's, never a flagged fixture.
 
+A result whose teams the check cannot match (an alias, a second language:
+msport's "Jakobstads Bollklubb" for JBK Pietarsaari) is stored but held back.
+It is used once any book's accepted listing for the fixture names those same
+teams, or once a person presses **Same match** on the local dashboard's
+*Results held back* tab; the next warm cycle then settles it, up to 14 days
+after kick-off, without another request to msport.
+
 **Pass 2, when API-Football's results arrive** (`odds/settle_confirm.py`). The
 ingestor runs daily at 02:00 UTC; the cold loop flattens its results into
 `fact_team_match` at 04:00 and runs pass 2 straight after. The warm loop runs

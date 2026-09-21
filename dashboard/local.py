@@ -6,6 +6,8 @@ runner keeps for it (LOCAL_DIR, ./data/local bind-mounted into the container):
     status.json          heartbeats and recent runs, every 30 s
     fixture_checks.json  every book the check could not clear for a fixture --
                          candidates to review, plus what was decided
+    held_results.json    finished matches whose msport result names teams the
+                         fixture does not: settlement waits for a person
     decisions.json       written HERE; the runner applies it within a minute
 
 Nothing touches DuckDB: the runner owns it, and a second process cannot open
@@ -218,9 +220,59 @@ def review() -> None:
         st.caption("Not shown: the file only carries what the check could not clear.")
 
 
+# --- results held back -------------------------------------------------------------------
+
+
+def held() -> None:
+    data = _read("held_results.json")
+    if data is None:
+        st.info(f"No held_results.json in {LOCAL} yet.")
+        return
+    st.caption(
+        f"Written {_when(data.get('writtenAt'))}. Each match has ended and msport has its "
+        "score, but under team names the check cannot match to the fixture (an alias, a "
+        "second language, a reserve side), so nothing was settled from it. **Same match** "
+        "accepts msport's listing: signals, slip legs and wallet bets on the fixture settle "
+        "on the next warm cycle. If it is a different match, leave it; flag the fixture as "
+        "a wrong match if its signals came from the mix-up."
+    )
+    decided = {(d["eventId"], d["book"]) for d in _decisions() if d.get("verdict") == "cleared"}
+    rows = [r for r in data.get("held", []) if (r["eventId"], "msport") not in decided]
+    st.subheader(f"Held back · {len(rows)}")
+    if not rows:
+        st.success("Nothing held back.")
+        return
+    for r in sorted(rows, key=lambda r: r.get("kickoffAt") or ""):
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([4, 4, 1])
+            c1.markdown(f"**{r['fixture']}** · {r.get('tournament') or ''}")
+            c1.caption(
+                f"kick-off {_when(r.get('kickoffAt'))} · {r.get('outcomes')} outcome(s) waiting"
+            )
+            c2.markdown(
+                f"msport: *{r.get('bookHome')} v {r.get('bookAway')}* · **{r.get('score')}**"
+            )
+            for listed in r.get("listings") or []:
+                c2.caption(
+                    f"{listed['book']} lists {listed.get('home')} v {listed.get('away')} "
+                    f"({listed['verdict']})"
+                )
+            if c3.button("Same match", key=f"h-{r['eventId']}", type="primary"):
+                _decide(
+                    r["eventId"],
+                    "msport",
+                    "cleared",
+                    f"result accepted: {r.get('score')}",
+                    {"bookHome": r.get("bookHome"), "bookAway": r.get("bookAway")},
+                )
+                st.rerun()
+
+
 st.title("Arbibet · local")
-tab_health, tab_review = st.tabs(["Pipeline health", "Match review"])
+tab_health, tab_review, tab_held = st.tabs(["Pipeline health", "Match review", "Results held back"])
 with tab_health:
     health()
 with tab_review:
     review()
+with tab_held:
+    held()
