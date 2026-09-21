@@ -57,6 +57,82 @@ HEADERS = {
     "Accept": "application/json",
 }
 
+# What something asked about, in the engine's terms: a CTE both passes start
+# from. `time_basis` says which score a market settles on; it lives on
+# dim_market_outcome.
+ASKED = """
+    asked AS (
+        SELECT e.event_id, o.market_family, o.period, o.time_basis,
+               if(o.has_line, o.side || '@' || e.specifier, o.side) AS side_or_line
+        FROM core.fact_ev_signal e
+        JOIN core.dim_market_outcome o
+          ON o.market_id = e.market_base_id::varchar AND o.outcome_id = e.outcome_id
+        UNION
+        SELECT s.event_id, o.market_family, o.period, o.time_basis,
+               if(o.has_line, o.side || '@' || s.specifier, o.side)
+        FROM core.fact_arbitrage_signal s,
+             unnest(cast(s.legs AS json[])) AS leg(value)
+        JOIN core.dim_market_outcome o
+          ON o.market_id = s.market_base_id::varchar
+         AND o.outcome_id = json_extract_string(leg.value, '$.outcome_id')
+        WHERE s.arbitrage > 1
+        UNION
+        SELECT l.event_id, l.market_family, l.period, o.time_basis, l.side_or_line
+        FROM analytics.stg_slip_leg l
+        JOIN core.dim_market_outcome o
+          ON o.market_id = l.market_id AND o.outcome_id = l.outcome_id
+        WHERE l.event_id IS NOT NULL AND l.side_or_line IS NOT NULL
+    )
+"""
+
+# An outcome a wallet bet names, in the engine's terms.
+_OUTCOME = """
+    SELECT o.market_family, o.period, o.time_basis, o.side, o.has_line
+    FROM core.dim_market_outcome o
+    WHERE o.market_id = %s AND o.outcome_id = %s
+"""
+
+
+def wallet_demand(warehouse: Any, since_days: int | None = None) -> list[dict[str, Any]]:
+    """Wallet bets' outcomes: open ones, and with `since_days` those settled lately
+    too (pass 2 confirms what they were paid on). Best-effort: no bot, no demand."""
+    from datetime import UTC, datetime, timedelta
+
+    try:
+        from runner import telegram
+        from runner.telegram.store import Store
+
+        if not telegram.configured():
+            return []
+        store = Store()
+        bets = store.open_bets(datetime.now(UTC))
+        if since_days is not None:
+            bets += store.settled_bets(datetime.now(UTC) - timedelta(days=since_days))
+    except Exception:
+        log.warning("wallet demand unavailable", exc_info=True)
+        return []
+    rows: list[dict[str, Any]] = []
+    with warehouse.cursor() as cur:
+        for bet in bets:
+            base, _, specifier = str(bet["market_id"]).partition(";")
+            for leg in bet["legs"]:
+                cur.execute(_OUTCOME, (base, str(leg.get("outcomeId"))))
+                found = cur.fetchone()
+                if not found:
+                    continue
+                family, period, basis, side, has_line = found
+                rows.append(
+                    {
+                        "event_id": str(bet["event_id"]),
+                        "market_family": family,
+                        "period": period,
+                        "time_basis": basis,
+                        "side_or_line": f"{side}@{specifier}" if has_line else side,
+                    }
+                )
+    return rows
+
+
 # msport's `eventMatchStatus`, reduced to what this pass cares about.
 _STATUS = {
     "ended": "ended",
@@ -223,6 +299,7 @@ def settle_demand(
                 "market_family": key[0],
                 "period": key[1],
                 "side_or_line": key[2],
+                "time_basis": str(row.get("time_basis") or "regular"),
                 "verdict": verdict.verdict,
                 "reason": verdict.reason,
             }

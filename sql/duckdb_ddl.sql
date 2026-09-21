@@ -214,13 +214,20 @@ CREATE TABLE IF NOT EXISTS fact_outcome_result (
     side_or_line   VARCHAR     NOT NULL,
     verdict        VARCHAR     NOT NULL,   -- won | lost | push | void | half_win | half_loss
     reason         VARCHAR,
-    stage          VARCHAR     NOT NULL,   -- provisional | confirmed | corrected
+    stage          VARCHAR     NOT NULL,   -- provisional | confirmed | corrected | disputed
     source         VARCHAR     NOT NULL,
     score          VARCHAR,                -- "2:1 (HT 1:0)", what it was settled on
     settled_at     TIMESTAMPTZ NOT NULL,
     confirmed_at   TIMESTAMPTZ
 
 );
+
+-- Pass 2 (odds/settle_confirm.py): what API-Football said about a verdict.
+-- `previous_verdict` is pass 1's, kept when pass 2 corrected it.
+ALTER TABLE fact_outcome_result ADD COLUMN IF NOT EXISTS time_basis VARCHAR;
+ALTER TABLE fact_outcome_result ADD COLUMN IF NOT EXISTS previous_verdict VARCHAR;
+ALTER TABLE fact_outcome_result ADD COLUMN IF NOT EXISTS confirmed_by VARCHAR;
+ALTER TABLE fact_outcome_result ADD COLUMN IF NOT EXISTS confirmed_score VARCHAR;
 
 -- Whether each book's payload for a fixture names the fixture's teams
 -- (arbibet_capstone.verify). A `mismatch` book is excluded from every

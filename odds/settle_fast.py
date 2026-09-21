@@ -35,12 +35,14 @@ import httpx
 
 from arbibet_capstone.env import load as load_env
 from arbibet_capstone.fast_settle import (
+    ASKED,
     HEADERS,
     SOURCE,
     fetch_msport,
     parse_msport,
     settle_demand,
     trusted,
+    wallet_demand,
 )
 from arbibet_capstone.priority import yield_to_hot
 from arbibet_capstone.warehouse import connect, merge_bulk
@@ -54,31 +56,8 @@ MAX_HOURS = int(os.environ.get("SETTLE_FAST_MAX_HOURS", "36"))
 BUDGET = int(os.environ.get("SETTLE_FAST_BUDGET", "150"))
 SPACING_SECONDS = float(os.environ.get("SETTLE_FAST_SPACING", "0.4"))
 
-# What something asked about, in the engine's terms. `time_basis` says which
-# score a market settles on; it lives on dim_market_outcome.
-_DEMAND = """
-    WITH asked AS (
-        SELECT e.event_id, o.market_family, o.period, o.time_basis,
-               if(o.has_line, o.side || '@' || e.specifier, o.side) AS side_or_line
-        FROM core.fact_ev_signal e
-        JOIN core.dim_market_outcome o
-          ON o.market_id = e.market_base_id::varchar AND o.outcome_id = e.outcome_id
-        UNION
-        SELECT s.event_id, o.market_family, o.period, o.time_basis,
-               if(o.has_line, o.side || '@' || s.specifier, o.side)
-        FROM core.fact_arbitrage_signal s,
-             unnest(cast(s.legs AS json[])) AS leg(value)
-        JOIN core.dim_market_outcome o
-          ON o.market_id = s.market_base_id::varchar
-         AND o.outcome_id = json_extract_string(leg.value, '$.outcome_id')
-        WHERE s.arbitrage > 1
-        UNION
-        SELECT l.event_id, l.market_family, l.period, o.time_basis, l.side_or_line
-        FROM analytics.stg_slip_leg l
-        JOIN core.dim_market_outcome o
-          ON o.market_id = l.market_id AND o.outcome_id = l.outcome_id
-        WHERE l.event_id IS NOT NULL AND l.side_or_line IS NOT NULL
-    )
+_DEMAND = f"""
+    WITH {ASKED}
     SELECT a.event_id, a.market_family, a.period, a.time_basis, a.side_or_line,
            f.sr_match_id, f.home_team, f.away_team, f.kickoff_at
     FROM asked a
@@ -93,47 +72,6 @@ _DEMAND = """
             AND r.period = a.period AND r.side_or_line = a.side_or_line
       )
 """
-
-# An outcome a wallet bet names, in the engine's terms.
-_OUTCOME = """
-    SELECT o.market_family, o.period, o.time_basis, o.side, o.has_line
-    FROM core.dim_market_outcome o
-    WHERE o.market_id = %s AND o.outcome_id = %s
-"""
-
-
-def _wallet_demand(warehouse: Any) -> list[dict[str, Any]]:
-    """Open wallet bets' outcomes. Best-effort: no bot, no Supabase, no demand."""
-    try:
-        from runner import telegram
-        from runner.telegram.store import Store
-
-        if not telegram.configured():
-            return []
-        bets = Store().open_bets(datetime.now(UTC))
-    except Exception:
-        log.warning("wallet demand unavailable", exc_info=True)
-        return []
-    rows: list[dict[str, Any]] = []
-    with warehouse.cursor() as cur:
-        for bet in bets:
-            base, _, specifier = str(bet["market_id"]).partition(";")
-            for leg in bet["legs"]:
-                cur.execute(_OUTCOME, (base, str(leg.get("outcomeId"))))
-                found = cur.fetchone()
-                if not found:
-                    continue
-                family, period, basis, side, has_line = found
-                rows.append(
-                    {
-                        "event_id": str(bet["event_id"]),
-                        "market_family": family,
-                        "period": period,
-                        "time_basis": basis,
-                        "side_or_line": f"{side}@{specifier}" if has_line else side,
-                    }
-                )
-    return rows
 
 
 def main() -> int:
@@ -157,7 +95,7 @@ def main() -> int:
                     "side_or_line": r.SIDE_OR_LINE,
                 }
             )
-        for row in _wallet_demand(warehouse):
+        for row in wallet_demand(warehouse):
             if row["event_id"] in fixtures:
                 demand[row["event_id"]].append(row)
 

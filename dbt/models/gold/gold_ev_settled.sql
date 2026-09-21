@@ -38,10 +38,14 @@ select
     ev.is_fresh,
     ev.detected_at,
     {{ platform_time('ev.kickoff_at') }}                      as kickoff_at,
-    -- API-Football's verdict when it has one; otherwise pass 1's, settled
-    -- from the book's own final score minutes after full time.
-    coalesce(r.verdict, p.verdict)                            as verdict,
-    case when r.verdict is not null then 'confirmed' else p.stage end as result_stage
+    -- Pass 2's word is final (confirmed | corrected). Before it runs:
+    -- API-Football's own table when it has the market, else pass 1's verdict
+    -- from the book's final score, minutes after full time (provisional).
+    case when p.stage in ('confirmed', 'corrected') then p.verdict
+         else coalesce(r.verdict, p.verdict) end              as verdict,
+    case when p.stage in ('confirmed', 'corrected') then p.stage
+         when r.verdict is not null then 'confirmed'
+         else p.stage end                                     as result_stage
 from ev
 left join {{ source('core', 'dim_market_outcome') }} o
        on o.market_id  = ev.market_base_id::varchar

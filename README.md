@@ -133,8 +133,8 @@ writer. Every job, including dbt and Spark, runs inside it.
 | Loop | Trigger | Work |
 |---|---|---|
 | Hot | NOTIFY from bronze; 15 s poll fallback | Recompute arbitrage and EV for the changed fixture, store, alert, publish |
-| Warm | :00, :15, :30, :45 (an overrun starts the next at once) | Dimensions, match checks, slips, price history, arbitrage tracking, live state, dbt, AI summaries, bet settlement, publish |
-| Cold | Daily 06:00 Berlin | Spark flatten and settle, dbt build and tests, slip compaction, backup, pruning |
+| Warm | :00, :15, :30, :45 (an overrun starts the next at once) | Dimensions, match checks, slips, price history, arbitrage tracking, live state, settlement pass 1 (and pass 2 hourly), dbt, AI summaries, bet settlement, publish |
+| Cold | Daily 06:00 Berlin | Spark flatten and settle, settlement pass 2, dbt build and tests, slip compaction, backup, pruning |
 
 - Writes are MERGEs on natural keys, so any job can be re-run. A failed job is
   recorded and retried on the next cycle.
@@ -166,48 +166,66 @@ real bet was placed on one before this existed.
 
 ### Settlement
 
-Two passes. **Pass 1, minutes after full time** (`odds/settle_fast.py`, every
-warm cycle): neither collector records a finished match (markets bronze stops
-at kick-off; the live collector follows a few competitions), but msport's
+Settlement is driven by demand: only the outcomes that an EV signal, a surebet
+leg, a slip leg or a wallet bet refers to are settled, a few thousand rows a
+day, into `core.fact_outcome_result`. Two passes write it.
+
+**Pass 1, about two hours after kick-off** (`odds/settle_fast.py`, every warm
+cycle). Neither collector records a finished match (markets bronze stops at
+kick-off; the live collector follows a few competitions), but msport's
 match-detail endpoint keeps answering with `Ended`, the final score and the
-half-time score. For every fixture that an EV signal, surebet leg, slip leg or
-wallet bet refers to, that score is fetched once and the vendored engine
-settles exactly the markets asked about, any family, period or line a
-scoreline decides, into `fact_outcome_result` as `provisional`. It refuses
-rather than guesses: only `Ended`, only normal-time matches, only when the
-match check accepts msport's teams as the fixture's, never a flagged fixture.
-**Pass 2, daily** (below) is API-Football; where both have a verdict,
-API-Football's is used.
+half-time score. That score is fetched once per fixture and the vendored
+engine settles every demanded market a scoreline decides, any family, period
+or line, as `provisional`. It refuses rather than guesses: only `Ended`, only
+normal-time matches, only when the match check accepts msport's teams as the
+fixture's, never a flagged fixture.
 
-How pass 2 gives a signal, a slip leg or a wallet bet its result:
+**Pass 2, when API-Football's results arrive** (`odds/settle_confirm.py`). The
+ingestor runs daily at 02:00 UTC; the cold loop flattens its results into
+`fact_team_match` at 04:00 and runs pass 2 straight after. The warm loop runs
+it again hourly for demand that turns up after the result did. It re-settles
+the same demand from API-Football's period scores and, per outcome:
 
-1. The API-Football ingestor stores match payloads in Postgres.
-2. The cold loop (daily, 06:00 Berlin) runs `spark/flatten.py` over payloads
-   ingested in the last three days; matches marked FT, AET or PEN become two
-   rows each in `fact_team_match`.
-3. `spark/settle.py` runs the vendored settlement engine over them into
-   `fact_team_market_result`: one verdict per team, market family, period and
-   line. It is configured for five families (1x2, double chance, both teams to
-   score, total goals at 0.5-4.5, draw no bet), full match only, because every
-   family across 157,000 fixtures would be 66 million rows.
-4. dbt joins results to EV signals (`gold_ev_settled`) and slip legs; the warm
-   loop settles Telegram wallet bets from the same table, all legs at once.
+| Stage | Meaning |
+|---|---|
+| `confirmed` | Pass 1 said the same. The verdict stands; who confirmed it, when and on what score is recorded. |
+| `corrected` | Pass 1 said otherwise. API-Football wins, pass 1's verdict is kept in `previous_verdict`, and a wallet bet already paid on it is re-paid: the difference moves on each book's balance and the bet's note says why. |
+| `disputed` | Pass 1 said otherwise, but the teams API-Football names are not recognisably the fixture's. A wrong link is as likely as a wrong score, so the verdict is left alone and retried. |
+| `confirmed`, source `apifootball` | Pass 1 never settled it: no msport id, unverified teams, extra time or penalties, a fixture outside pass 1's 36 hours, or a market a scoreline cannot decide. Corner totals settle here, from match statistics, for matches that ended in normal time. |
 
-Measured on 19 September 2026 (fixtures kicked off at least three hours earlier):
+A `confirmed` or `corrected` outcome is final and never looked at again, so
+pass 2 is idempotent and reads the warehouse only. dbt (`gold_ev_settled`,
+`gold_slip_leg_history`) and the wallet read the final verdict when there is
+one, then `fact_team_market_result`, then pass 1's.
 
-| Why a row has no result | EV signals (495) | Slip legs (31,118) |
-|---|---|---|
-| Settled | 40% | 74% |
-| Market family or period not configured (Asian handicap, halves, team totals, correct score, corners) | 42% | 12% |
-| Fixture never matched to API-Football, or aged out of `dim_fixture` | 10% | 5% |
-| Match result not in the warehouse yet (next morning's run), postponed, or not covered | 7% | 3% |
-| Market outside the settlement taxonomy (book-specific specials) | 1% | 4% |
-| Goal line above 4.5 | 0% | 1% |
+`spark/settle.py` still writes `fact_team_market_result`, one verdict per team
+for five families (1x2, double chance, both teams to score, total goals,
+draw no bet) across all history. That table is the form dimension ("over 2.5
+in 7 of the last 10"), not the settlement of signals.
 
-Results arrive once a day, so a match finishing at 22:00 settles about seven
-hours later and one finishing after 06:00 waits for the next morning. Of
-fixtures with API-Football ids, 89% have a result one day after kick-off and
-about 98% after four days.
+Measured on 21 September 2026 (fixtures kicked off at least three hours
+earlier; pass 2 run against that morning's backup):
+
+| | Before (19 Sep) | Pass 1 only | Both passes |
+|---|---|---|---|
+| EV signals with a result | 40% | 58% | 82% |
+| Slip legs with a result | 74% | | 93% |
+
+- Pass 1 writes a verdict a median 2.1 hours after kick-off (90th percentile
+  2.3). Of 609 ended fixtures it polled, 560 were settled, 49 refused for
+  unverified teams and 8 for a missing half-time score.
+- Where both sources had the match: 299 of 299 final and half-time scores
+  agree, and 1,029 of 1,029 provisional verdicts were confirmed. No
+  corrections, no disputes so far.
+- Pass 2's first run wrote 9,345 verdicts in one second: 8,316 new (1,738
+  fixtures), among them 215 corner totals and 99 outcomes of matches that went
+  to extra time or penalties. All 5,635 that overlap `fact_team_market_result`
+  match it.
+- What still has no result: API-Football has no finished result yet (10% of EV
+  signals; 89% of linked fixtures have one a day after kick-off, 98% after
+  four), the fixture was never linked to API-Football (8%), and families the
+  engine does not implement (`1x2_ten_minute_interval`, `next_goal`,
+  `last_goal`, a few combination markets; under 1%).
 
 ## Dashboards
 

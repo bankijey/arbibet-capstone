@@ -435,6 +435,29 @@ class Store:
         )
         return [self._bet(r) for r in rows]
 
+    def settled_bets(self, kicked_off_after: datetime) -> list[dict[str, Any]]:
+        """Bets already paid out, recent enough for pass 2 to still correct."""
+        rows = self._run(
+            lambda c: c.execute(
+                f"SELECT {_BET_COLUMNS} FROM bot.bet WHERE status = 'settled' AND kickoff_at > %s "
+                "ORDER BY kickoff_at",
+                (kicked_off_after,),
+            ).fetchall()
+        )
+        return [self._bet(r) for r in rows]
+
+    def correct_bet(
+        self, bet_id: int, legs: list[dict[str, Any]], profit: float, note: str
+    ) -> None:
+        """Re-settle a paid bet on a corrected verdict; `settled_at` stays the first payout's."""
+        self._run(
+            lambda c: c.execute(
+                "UPDATE bot.bet SET legs = %s, profit = %s, "
+                "note = concat_ws(' | ', nullif(note, ''), %s::text) WHERE bet_id = %s",
+                (Jsonb(legs), profit, note, bet_id),
+            )
+        )
+
     def add_report(
         self,
         chat_id: int,

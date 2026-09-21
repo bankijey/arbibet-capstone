@@ -150,7 +150,9 @@ select
     -- (FINDINGS 13c). `dim_market_outcome.primary_team` says which row.
     -- ...or, until API-Football has it, pass 1's verdict from the book's own
     -- final score (odds/settle_fast.py).
-    coalesce(v.verdict, p.verdict)                      as resolution
+    -- Once pass 2 has spoken (confirmed | corrected) its verdict is the one.
+    case when p.stage in ('confirmed', 'corrected') then p.verdict
+         else coalesce(v.verdict, p.verdict) end        as resolution
 
 from leg l
 left join {{ source('core', 'fact_team_market_result') }} v

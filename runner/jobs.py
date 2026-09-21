@@ -15,15 +15,21 @@ WARM (every 15 minutes, in order):
     live_state         match status; are signal legs still offered
     settle_fast        pass 1 of settlement: msport's final score, minutes after
                        full time, for every market something asked about
+    settle_confirm     pass 2, hourly: demand that arrived after API-Football's
+                       results did (a slip shared late, an old fixture)
     dbt_run            staging and gold models
     brief_fixtures     pre-match AI briefs, when their evidence moved
     summarise_upcoming AI slip verdicts, 60 per run
     summarise_results  post-match AI notes
-    settle_bets        subscribers' Telegram wallet bets, from the results
+    settle_bets        subscribers' Telegram wallet bets, from the results; re-pays
+                       a bet whose verdict pass 2 corrected
     publish            serving tables to Supabase (when configured)
 
 COLD (daily at 06:00 Berlin):
     flatten, settle    match history and settled markets (Spark)
+    settle_confirm     pass 2 of settlement: API-Football's results, two hours
+                       after its ingestor's daily run, confirm or correct pass 1
+                       and settle what it could not (extra time, corners)
     dbt_build          models AND tests
     summarise_played   AI verdicts on played slips
     compact_slips      one Parquet file per month
@@ -274,6 +280,11 @@ def warm_jobs(warehouse: Warehouse) -> list[Job]:
         Job("track_arbitrage", script("odds/arbitrage_track.py")),
         Job("live_state", script("odds/live_state.py")),
         Job("settle_fast", script("odds/settle_fast.py", returns_rows=True)),
+        Job(
+            "settle_confirm",
+            script("odds/settle_confirm.py", returns_rows=True),
+            every=timedelta(hours=1),
+        ),
         Job("dbt_run", dbt("run")),
         Job("brief_fixtures", script("enrich/fixture_summary.py")),
         Job(
@@ -293,6 +304,7 @@ def cold_jobs(warehouse: Warehouse, observer: Observer) -> list[Job]:
     return [
         Job("flatten", script("spark/flatten.py", env={"FLATTEN_SINCE_DAYS": "3"})),
         Job("settle", script("spark/settle.py")),
+        Job("settle_confirm", script("odds/settle_confirm.py", returns_rows=True)),
         Job("dbt_build", dbt("build")),
         Job(
             "summarise_played",
