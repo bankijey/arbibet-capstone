@@ -187,7 +187,10 @@ def _position(head, slip: pd.Series, total: int) -> None:
         head.badge("live · nothing settled yet", icon=":material/check:", color="green")
         return
     remaining = int(slip.REMAINING) if pd.notna(slip.REMAINING) else max(total - won, 0)
-    head.badge(f"live · {won} of {total} won", icon=":material/check:", color="green")
+    if remaining == 0:
+        head.badge(f"won · all {total} landed", icon=":material/check:", color="green")
+    else:
+        head.badge(f"live · {won} of {total} won", icon=":material/check:", color="green")
     head.caption(
         f"{_multiplier(slip.LOCKED_IN)} locked in"
         + (f" · {_multiplier(slip.PENDING_ODDS)} still to land" if remaining else " · all landed")
