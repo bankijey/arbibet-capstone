@@ -181,13 +181,13 @@ def _position(head, slip: pd.Series, total: int) -> None:
     """Where the slip stands: alive and how much is locked in, or dead."""
     won, lost = int(slip.WON or 0), int(slip.LOST or 0)
     if lost:
-        head.badge(f"lost · {won} won · {lost} lost", icon="✗", color="red")
+        head.badge(f"lost · {won} won · {lost} lost", icon=":material/close:", color="red")
         return
     if won == 0:
-        head.badge("live · nothing settled yet", icon="✓", color="green")
+        head.badge("live · nothing settled yet", icon=":material/check:", color="green")
         return
     remaining = int(slip.REMAINING) if pd.notna(slip.REMAINING) else max(total - won, 0)
-    head.badge(f"live · {won} of {total} won", icon="✓", color="green")
+    head.badge(f"live · {won} of {total} won", icon=":material/check:", color="green")
     head.caption(
         f"{_multiplier(slip.LOCKED_IN)} locked in"
         + (f" · {_multiplier(slip.PENDING_ODDS)} still to land" if remaining else " · all landed")
