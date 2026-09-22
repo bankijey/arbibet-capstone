@@ -265,8 +265,10 @@ def main() -> int:
                         _SETTLED
                         % (
                             home_id,
-                            fixture["HOME_TEAM"],
-                            fixture["AWAY_TEAM"],
+                            # Team names are interpolated as SQL literals:
+                            # Excelsior '31 v AFC '34 broke every brief after it.
+                            str(fixture["HOME_TEAM"]).replace("'", "''"),
+                            str(fixture["AWAY_TEAM"]).replace("'", "''"),
                             home_id,
                             away_id,
                             kickoff,
