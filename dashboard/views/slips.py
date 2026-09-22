@@ -5,9 +5,13 @@ Two sections, each collapsible:
 * **Deep dives** -- the fixtures the most distinct slips name, ten still to be
   played as cards and twenty already started as a list, each opening its own
   page.
-* **Popular slips, checked leg by leg** -- the most-copied slips, upcoming and
-  played ranked separately, with every leg's live match status and, once
+* **Popular slips, checked leg by leg** -- upcoming slips ranked by what they
+  have locked in (legs already won, no leg lost; dead slips last, in red), and
+  played slips by copies, with every leg's live match status and, once
   settled, how it resolved.
+* **Biggest winners and losers** -- single picks across every settled slip: the
+  most-copied that landed at the longest prices, and the most-copied that
+  failed at the shortest.
 
 Data: the 'slips' document the runner publishes to Supabase -- every slipped
 fixture ranked by distinct slips, the most-copied slips with their verdicts,
@@ -17,8 +21,13 @@ and those slips' legs with live status and results.
 from __future__ import annotations
 
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
-from dashboard.common import document, frame, is_upcoming, kickoff
+from dashboard.common import document, event_link, frame, is_upcoming, kickoff
+
+# Status colours (dataviz palette): a pick that won or lost is a state, not a series.
+GOOD = "#0ca30c"
+CRITICAL = "#d03b3b"
 
 SLIP_COUNT = 10
 UPCOMING_DIVES = 10
@@ -164,6 +173,27 @@ def _status(row: pd.Series) -> str:
     return "not started" if row.UPCOMING else "kicked off"
 
 
+def _multiplier(value: object) -> str:
+    return f"×{float(value):,.2f}" if pd.notna(value) else "×?"
+
+
+def _position(head, slip: pd.Series, total: int) -> None:
+    """Where the slip stands: alive and how much is locked in, or dead."""
+    won, lost = int(slip.WON or 0), int(slip.LOST or 0)
+    if lost:
+        head.badge(f"lost · {won} won · {lost} lost", icon="✗", color="red")
+        return
+    if won == 0:
+        head.badge("live · nothing settled yet", icon="✓", color="green")
+        return
+    remaining = int(slip.REMAINING) if pd.notna(slip.REMAINING) else max(total - won, 0)
+    head.badge(f"live · {won} of {total} won", icon="✓", color="green")
+    head.caption(
+        f"{_multiplier(slip.LOCKED_IN)} locked in"
+        + (f" · {_multiplier(slip.PENDING_ODDS)} still to land" if remaining else " · all landed")
+    )
+
+
 def _slip_cards(cards: pd.DataFrame, legs: pd.DataFrame) -> None:
     for _, slip in cards.iterrows():
         rows = legs[legs.SHARE_CODE == slip.SHARE_CODE].copy()
@@ -195,8 +225,7 @@ def _slip_cards(cards: pd.DataFrame, legs: pd.DataFrame) -> None:
                 head.badge(f"part-played · {to_play} of {total} still to play", color="orange")
             else:
                 head.badge("played · every leg has kicked off", color="grey")
-            if int(slip.WON or 0) or int(slip.LOST or 0):
-                head.caption(f"Settled so far: {int(slip.WON)} won · {int(slip.LOST)} lost")
+            _position(head, slip, total)
             body.write(slip.SUMMARY)
             if rows.empty:
                 continue
@@ -254,10 +283,13 @@ def popular_slips() -> None:
     st.caption(
         "**Upcoming** slips still have at least one fixture to play; a slip with "
         "some legs already kicked off stays here, marked part-played, until its "
-        "last one starts. **Played** slips are the record. Each tab is ranked by "
-        "copies on its own, because copies pile up over time and the most-copied "
-        "slips of all time are always old ones. **Status** is the match as the "
-        "books show it now; **Result** is how the leg settled."
+        "last one starts. They are ranked as a punter holding them would: every "
+        "slip still alive first, by legs already won and what they have **locked "
+        "in** (the multiplier those legs secured), so two legs won and one to play "
+        "beats a slip nothing has settled on yet; then by copies. A slip with one leg "
+        "lost is dead whatever else it holds: it is shown in red, after every "
+        "live one. **Played** slips are the record, ranked by copies. **Status** "
+        "is the match as the books show it now; **Result** is how the leg settled."
     )
     # One row per slip: the newest verdict (QUALIFY -- a slip whose legs changed
     # gains a row, and the page must not show a stale card above its
@@ -277,9 +309,17 @@ def popular_slips() -> None:
             "won": "WON",
             "lost": "LOST",
             "combinedOdds": "COMBINED_ODDS",
+            "lockedIn": "LOCKED_IN",
+            "pendingOdds": "PENDING_ODDS",
+            "alive": "ALIVE",
+            "remaining": "REMAINING",
+            "rank": "RANK",
         },
         times=("FIRST_KICKOFF", "LAST_KICKOFF"),
     )
+    # The publisher ranked them (rank_slips); keep that order after the re-split.
+    if slips.RANK.notna().any():
+        slips = slips.sort_values("RANK", kind="stable")
     waiting = body["waiting"]
     # Upcoming = its LAST leg has not kicked off yet, judged now (see is_upcoming).
     up_mask = is_upcoming(slips.LAST_KICKOFF)
@@ -330,12 +370,6 @@ def popular_slips() -> None:
             _slip_cards(shown_played, legs)
 
 
-with st.expander("Deep dives", expanded=True):
-    deep_dives()
-
-with st.expander("Popular slips, checked leg by leg", expanded=True):
-    popular_slips()
-
 st.divider()
 st.caption(
     "**What these numbers are not.** `Last 10` is recent form over at most ten "
@@ -345,3 +379,126 @@ st.caption(
     "figures are a reading, not a standing claim. Reference implementation, not "
     "a betting service."
 )
+
+
+# --- biggest winners and losers --------------------------------------------------------
+
+_PICK_COLUMNS = {
+    "eventId": "EVENT_ID",
+    "fixture": "FIXTURE",
+    "tournament": "TOURNAMENT",
+    "kickoffAt": "KICKOFF_AT",
+    "market": "MARKET_NAME",
+    "pick": "OUTCOME_NAME",
+    "odds": "ODDS",
+    "slips": "SLIPS",
+    "copies": "COPIES",
+    "resolution": "RESOLUTION",
+}
+
+
+def _pick_trace(picks: pd.DataFrame, name: str, colour: str, size: pd.Series) -> go.Scatter:
+    # Sizes 8-40px on the square root, so area follows the score; a 1px surface
+    # ring keeps overlapping marks apart.
+    scaled = 8 + 32 * (size / size.max()) ** 0.5 if size.max() > 0 else 8
+    return go.Scatter(
+        x=picks.ODDS,
+        y=picks.COPIES,
+        mode="markers",
+        name=name,
+        marker={
+            "size": scaled,
+            "color": colour,
+            "opacity": 0.72,
+            "line": {"width": 1, "color": "rgba(255,255,255,0.7)"},
+        },
+        customdata=picks[["FIXTURE", "OUTCOME_NAME", "MARKET_NAME", "SLIPS", "TOURNAMENT"]],
+        hovertemplate=(
+            "<b>%{customdata[0]}</b><br>%{customdata[1]} · %{customdata[2]}<br>"
+            "odds %{x:.2f} · %{y:,.0f} copies on %{customdata[3]} slips<br>"
+            "<i>%{customdata[4]}</i><extra>" + name + "</extra>"
+        ),
+    )
+
+
+def _pick_table(picks: pd.DataFrame, title: str, help_text: str) -> None:
+    st.markdown(f"**{title}**")
+    st.caption(help_text)
+    shown = picks.head(10).copy()
+    shown["ko"] = shown.KICKOFF_AT.map(kickoff)
+    shown["page"] = shown.EVENT_ID.map(event_link)
+    st.dataframe(
+        shown[
+            ["FIXTURE", "OUTCOME_NAME", "MARKET_NAME", "ODDS", "COPIES", "SLIPS", "ko", "page"]
+        ].rename(
+            columns={
+                "FIXTURE": "Fixture",
+                "OUTCOME_NAME": "Pick",
+                "MARKET_NAME": "Market",
+                "ODDS": "Odds",
+                "COPIES": "Copies",
+                "SLIPS": "Slips",
+                "ko": "Kick-off",
+                "page": "Event",
+            }
+        ),
+        column_config={
+            "Odds": st.column_config.NumberColumn(format="%.2f"),
+            "Copies": st.column_config.NumberColumn(format="%d"),
+            "Event": st.column_config.LinkColumn("Event", display_text="open"),
+        },
+        hide_index=True,
+        use_container_width=True,
+    )
+
+
+@st.fragment
+def winners_and_losers() -> None:
+    body = document("slips").get("picks") or {}
+    won = frame(body.get("won", []), _PICK_COLUMNS, times=("KICKOFF_AT",))
+    lost = frame(body.get("lost", []), _PICK_COLUMNS, times=("KICKOFF_AT",))
+    if won.empty and lost.empty:
+        st.info("No settled picks yet.")
+        return
+    st.caption(
+        "One pick is one outcome of one match, counted across every settled slip "
+        "that carried it; copies are summed over those slips. **Winners** are the "
+        "picks that landed, biggest by copies × odds: what they returned to the "
+        "people who copied them. **Losers** are the picks that failed, biggest by "
+        "copies ÷ odds: the sure things, backed by the most people at the shortest "
+        "prices, that did not come in. Both axes are logarithmic; the size of a "
+        "mark is that score. Hover for the match."
+    )
+    figure = go.Figure()
+    if not won.empty:
+        figure.add_trace(_pick_trace(won, "won ✓", GOOD, won.COPIES * won.ODDS))
+    if not lost.empty:
+        figure.add_trace(_pick_trace(lost, "lost ✗", CRITICAL, lost.COPIES / lost.ODDS))
+    figure.update_layout(
+        height=420,
+        margin={"t": 10, "b": 0, "l": 0, "r": 0},
+        xaxis={"title": "odds of the pick", "type": "log", "showgrid": True},
+        yaxis={"title": "copies (all slips carrying it)", "type": "log", "showgrid": True},
+        legend={"orientation": "h", "y": 1.08, "x": 0},
+        hovermode="closest",
+    )
+    st.plotly_chart(figure, use_container_width=True)
+    left, right = st.columns(2)
+    with left:
+        if not won.empty:
+            _pick_table(won, "Biggest winners", "Most copied at the longest price, and landed.")
+    with right:
+        if not lost.empty:
+            _pick_table(
+                lost, "Biggest losers", "Most copied at the shortest price, and did not land."
+            )
+
+
+with st.expander("Deep dives", expanded=True):
+    deep_dives()
+
+with st.expander("Popular slips, checked leg by leg", expanded=True):
+    popular_slips()
+
+with st.expander("Biggest winners and losers", expanded=True):
+    winners_and_losers()

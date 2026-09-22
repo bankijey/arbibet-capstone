@@ -83,6 +83,7 @@ TIMEZONE = "Europe/Berlin"
 UPCOMING_DIVES = 15  # ten are shown; the rest cover fixtures kicking off before the next run
 RECENT_DIVES = 30  # played since the newest archived day, most-slipped first
 SLIP_CARDS = 25  # per side, re-split by the clock in the browser
+PICKS = 150  # biggest winning and losing picks each, for the scatter
 DIVE_MARKETS = 10  # busiest markets charted per deep dive
 FORM_WINDOW = 10
 SETTLE_DELAY = timedelta(hours=3)
@@ -597,6 +598,45 @@ def backtest(settled: pd.DataFrame) -> dict[str, Any]:
 # --- live: slips -----------------------------------------------------------------------
 
 
+def rank_slips(cards: pd.DataFrame, now: pd.Timestamp) -> pd.DataFrame:
+    """Order slip cards the way a punter holding them would.
+
+    Upcoming (last leg still to kick off), first every slip still ALIVE -- no
+    leg lost -- by how many legs it has won, then by what those legs have
+    locked in (the multiplier they secured), then the fewest legs still to
+    land, then copies. Two legs won and one to play beats a slip nothing has
+    settled on yet. Slips with a
+    leg already lost are dead whatever else they hold; they come after every
+    live one, by copies, so the reader sees them but never above a live one.
+    Played slips stay by copies: they are the record, not a position.
+
+    Adds ALIVE, REMAINING and RANK; sorts by RANK.
+    """
+    cards = cards.copy()
+    won = cards.WON.fillna(0).astype(int)
+    lost = cards.LOST.fillna(0).astype(int)
+    legs = cards.LEG_COUNT.fillna(cards.LEGS).fillna(0).astype(int)
+    copies = cards.FOLLOWED_TIMES.fillna(0).astype(float)
+    cards["ALIVE"] = lost == 0
+    cards["REMAINING"] = (legs - won - lost).clip(lower=0)
+    upcoming = pd.to_datetime(cards.LAST_KICKOFF, utc=True) > now
+    locked = cards.LOCKED_IN.fillna(1.0).astype(float) if "LOCKED_IN" in cards else 1.0
+    order = pd.DataFrame(
+        {
+            "played": ~upcoming,
+            "dead": ~cards.ALIVE,
+            "won": -won,
+            "locked": -locked,
+            "remaining": cards.REMAINING,
+            "copies": -copies,
+        },
+        index=cards.index,
+    )
+    cards = cards.loc[order.sort_values(list(order.columns), kind="stable").index]
+    cards["RANK"] = range(1, len(cards) + 1)
+    return cards
+
+
 def slips(wh: Warehouse) -> dict[str, Any]:
     popular = wh.query(
         """
@@ -611,7 +651,7 @@ def slips(wh: Warehouse) -> dict[str, Any]:
         """
         SELECT s.share_code, s.followed_times, s.legs, s.legs_with_history, s.summary,
                o.legs AS leg_count, o.first_kickoff, o.last_kickoff, o.won, o.lost,
-               o.combined_odds
+               o.combined_odds, o.locked_in, o.pending_odds
         FROM CORE.gold_slip_summary_ai s
         LEFT JOIN ANALYTICS.gold_slip_overview o ON o.share_code = s.share_code
         QUALIFY row_number() OVER (PARTITION BY s.share_code ORDER BY s.generated_at DESC) = 1
@@ -631,9 +671,11 @@ def slips(wh: Warehouse) -> dict[str, Any]:
         .N
     )
     now = pd.Timestamp.now(tz="UTC")
+    cards = rank_slips(cards, now)
     upcoming = pd.to_datetime(cards.LAST_KICKOFF, utc=True) > now
     shown = pd.concat([cards[upcoming].head(SLIP_CARDS), cards[~upcoming].head(SLIP_CARDS)])
     codes = list(shown.SHARE_CODE)
+    picks = _picks(wh)
     legs = (
         wh.query(
             f"""
@@ -693,6 +735,11 @@ def slips(wh: Warehouse) -> dict[str, Any]:
                 "WON": "won",
                 "LOST": "lost",
                 "COMBINED_ODDS": "combinedOdds",
+                "LOCKED_IN": "lockedIn",
+                "PENDING_ODDS": "pendingOdds",
+                "ALIVE": "alive",
+                "REMAINING": "remaining",
+                "RANK": "rank",
             },
         ),
         "legs": {
@@ -700,7 +747,59 @@ def slips(wh: Warehouse) -> dict[str, Any]:
             for code, part in (legs.groupby("SHARE_CODE") if not legs.empty else [])
         },
         "waiting": waiting,
+        "picks": picks,
     }
+
+
+# One pick = one outcome of one match, as it appeared across every slip that
+# carried it. Copies are summed over those slips, so a pick on a hundred
+# small slips and a pick on one huge slip compare on the same footing.
+_PICKS = """
+    WITH pick AS (
+        SELECT event_id, market_name, outcome_name, share_code,
+               any_value(home_team || ' v ' || away_team) AS fixture,
+               any_value(tournament) AS tournament,
+               any_value(kickoff_at) AS kickoff_at,
+               any_value(odds) AS odds,
+               any_value(followed_times) AS copies,
+               any_value(resolution) AS resolution
+        FROM ANALYTICS.gold_slip_leg_history
+        WHERE resolution IN ('won', 'lost') AND odds > 1
+        GROUP BY 1, 2, 3, 4
+    ),
+    agg AS (
+        SELECT event_id, market_name, outcome_name, resolution,
+               any_value(fixture) AS fixture, any_value(tournament) AS tournament,
+               any_value(kickoff_at) AS kickoff_at,
+               median(odds) AS odds, count(*) AS slips, sum(coalesce(copies, 0)) AS copies
+        FROM pick GROUP BY 1, 2, 3, 4
+    )
+    SELECT * FROM agg WHERE resolution = '{verdict}' AND copies > 0
+    ORDER BY {score} DESC LIMIT {limit}
+"""
+
+
+def _picks(wh: Warehouse) -> dict[str, list[dict[str, Any]]]:
+    """The biggest winning picks (most copies at the longest price) and the
+    biggest losing ones (most copies at the shortest price: the sure things
+    that did not land)."""
+    columns = {
+        "EVENT_ID": "eventId",
+        "FIXTURE": "fixture",
+        "TOURNAMENT": "tournament",
+        "KICKOFF_AT": "kickoffAt",
+        "MARKET_NAME": "market",
+        "OUTCOME_NAME": "pick",
+        "ODDS": "odds",
+        "SLIPS": "slips",
+        "COPIES": "copies",
+        "RESOLUTION": "resolution",
+    }
+    out: dict[str, list[dict[str, Any]]] = {}
+    for verdict, score in (("won", "copies * odds"), ("lost", "copies / odds")):
+        sql = _PICKS.format(verdict=verdict, score=score, limit=PICKS)
+        out[verdict] = _records(wh.query(sql), columns)
+    return out
 
 
 # --- deep dives ------------------------------------------------------------------------
