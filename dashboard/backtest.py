@@ -252,7 +252,12 @@ def paper_wallet(
         settle_until(at)
         bankroll = cash + sum(p for _, p, _ in open_bets)
         if kind == "surebet":
+            # A surebet arriving while every dollar is tied up is skipped, and
+            # only counted when actually staked -- it used to be counted first,
+            # which showed bets the wallet never placed.
             stake = min(cash, bankroll * surebet_fraction)
+            if stake <= 0:
+                continue
             payout = stake * float(row.ARBITRAGE)
             verdict, edge, odds = "guaranteed", float(row.ARBITRAGE) - 1, None
             n_sure += 1

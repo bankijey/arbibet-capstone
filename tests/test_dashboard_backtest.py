@@ -109,3 +109,25 @@ def test_paper_wallet_scales_with_its_start_and_a_lookback_window() -> None:
     assert [round(c, 1) for c in s.CHANGE] == [50.0, -150.0, 50.0]
     assert round(float(s.DRAWDOWN.max()), 4) == round(150 / 1_050, 4)
     assert swings(curve.iloc[:0], 1_000.0).empty
+
+
+def test_a_surebet_with_no_free_cash_is_skipped_not_counted() -> None:
+    from dashboard.backtest import paper_wallet
+
+    t0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
+    tied = pd.DataFrame(
+        [
+            # The first surebet takes the whole bankroll and settles in two days;
+            # the second arrives an hour later with nothing left to stake.
+            {"DETECTED_AT": t0, "KICKOFF_AT": t0 + pd.Timedelta(days=2), "ARBITRAGE": 1.02},
+            {
+                "DETECTED_AT": t0 + pd.Timedelta(hours=1),
+                "KICKOFF_AT": t0 + pd.Timedelta(days=2),
+                "ARBITRAGE": 1.05,
+            },
+        ]
+    )
+    ev = pd.DataFrame(columns=["DETECTED_AT", "KICKOFF_AT", "EV", "ODDS", "VERDICT"])
+    w = paper_wallet(tied, ev, t0 + pd.Timedelta(days=3), start=1_000.0, surebet_fraction=1.0)
+    assert w.surebets == 1 and len(w.entries) == 1 and w.open_bets == 0
+    assert round(w.final, 2) == 1_020.0
