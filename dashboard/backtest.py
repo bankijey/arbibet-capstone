@@ -176,6 +176,23 @@ SUREBET_MIN = 1.015
 SUREBET_FRACTION = 0.20
 
 
+_ENTRY_COLUMNS = [
+    "DETECTED_AT",
+    "SETTLED_AT",
+    "KIND",
+    "FIXTURE",
+    "PICK",
+    "BOOK",
+    "ODDS",
+    "EDGE",
+    "VERDICT",
+    "STAKE",
+    "PAYOUT",
+    "PROFIT",
+    "BANKROLL",
+]
+
+
 class Wallet(NamedTuple):
     curve: pd.DataFrame  # AT, BANKROLL
     surebets: int
@@ -186,22 +203,32 @@ class Wallet(NamedTuple):
     final: float
     max_drawdown: float
     open_bets: int  # placed, not yet settled at the end
+    entries: pd.DataFrame = pd.DataFrame(columns=_ENTRY_COLUMNS)  # one row per settled bet
 
 
 def paper_wallet(
-    surebets: pd.DataFrame, ev: pd.DataFrame, now: pd.Timestamp, start: float = PAPER_START
+    surebets: pd.DataFrame,
+    ev: pd.DataFrame,
+    now: pd.Timestamp,
+    start: float = PAPER_START,
+    ev_sizing: str = "quarter_kelly",
+    surebet_fraction: float = SUREBET_FRACTION,
 ) -> Wallet:
     """`surebets`: one row per surebet (DETECTED_AT, KICKOFF_AT, ARBITRAGE), first
     detection per market. `ev`: settled EV detections as for `choose('first')`.
-    `start`: the opening bankroll; every stake is a fraction of what it became."""
+    `start`: the opening bankroll; every stake is a fraction of what it became.
+    `ev_sizing`: one of SIZINGS (flat = 1% of the START); `surebet_fraction`:
+    the share of the bankroll each surebet takes. `entries` records every bet
+    the wallet settled, in settlement order, with the bankroll after it."""
     events: list[tuple[pd.Timestamp, str, Any]] = [
         (pd.Timestamp(r.DETECTED_AT), "surebet", r) for r in surebets.itertuples(index=False)
     ] + [(pd.Timestamp(r.DETECTED_AT), "ev", r) for r in ev.itertuples(index=False)]
     events.sort(key=lambda e: e[0])
+    size = _STAKE[ev_sizing]
 
     cash = start
-    open_bets: list[tuple[pd.Timestamp, float]] = []
-    points: list[tuple[pd.Timestamp, float]] = []
+    open_bets: list[tuple[pd.Timestamp, float, dict[str, Any]]] = []
+    rows: list[dict[str, Any]] = []
     staked = 0.0
     n_sure = n_ev = ev_won = 0
 
@@ -209,39 +236,69 @@ def paper_wallet(
         nonlocal cash
         open_bets.sort(key=lambda b: b[0])
         while open_bets and open_bets[0][0] <= moment:
-            at, payout = open_bets.pop(0)
+            at, payout, meta = open_bets.pop(0)
             cash += payout
-            points.append((at, cash + sum(p for _, p in open_bets)))
+            rows.append(
+                meta
+                | {
+                    "SETTLED_AT": at,
+                    "PAYOUT": payout,
+                    "PROFIT": payout - meta["STAKE"],
+                    "BANKROLL": cash + sum(p for _, p, _ in open_bets),
+                }
+            )
 
     for at, kind, row in events:
         settle_until(at)
-        bankroll = cash + sum(p for _, p in open_bets)
+        bankroll = cash + sum(p for _, p, _ in open_bets)
         if kind == "surebet":
-            stake = min(cash, bankroll * SUREBET_FRACTION)
+            stake = min(cash, bankroll * surebet_fraction)
             payout = stake * float(row.ARBITRAGE)
+            verdict, edge, odds = "guaranteed", float(row.ARBITRAGE) - 1, None
             n_sure += 1
         else:
-            stake = min(cash, bankroll * _kelly(float(row.EV), float(row.ODDS)) / 4)
+            fraction = size(bankroll, float(row.EV), float(row.ODDS))
+            stake = min(cash, max(0.0, start * 0.01 if ev_sizing == "flat" else fraction))
             if stake <= 0:
                 continue
             payout = _payout(str(row.VERDICT), stake, float(row.ODDS))
+            verdict, edge, odds = str(row.VERDICT), float(row.EV), float(row.ODDS)
             n_ev += 1
             ev_won += row.VERDICT in ("won", "half_win")
         if stake <= 0:
             continue
         cash -= stake
         staked += stake
-        open_bets.append((pd.Timestamp(row.KICKOFF_AT) + SETTLE_AFTER, payout))
+        open_bets.append(
+            (
+                pd.Timestamp(row.KICKOFF_AT) + SETTLE_AFTER,
+                payout,
+                {
+                    "DETECTED_AT": at,
+                    "KIND": kind,
+                    "FIXTURE": getattr(row, "FIXTURE", None),
+                    "PICK": getattr(row, "PICK", None),
+                    "BOOK": getattr(row, "BOOK", None),
+                    "ODDS": odds,
+                    "EDGE": edge,
+                    "VERDICT": verdict,
+                    "STAKE": stake,
+                },
+            )
+        )
     settle_until(now)
     still_open = len(open_bets)
 
-    curve = pd.DataFrame(points, columns=["AT", "BANKROLL"])
-    equity = cash + sum(p for _, p in open_bets)
+    entries = pd.DataFrame(rows, columns=_ENTRY_COLUMNS)
+    curve = entries[["SETTLED_AT", "BANKROLL"]].rename(columns={"SETTLED_AT": "AT"})
+    equity = cash + sum(p for _, p, _ in open_bets)
     if curve.empty:
-        return Wallet(curve, n_sure, n_ev, ev_won, staked, 0.0, start, 0.0, still_open)
+        return Wallet(curve, n_sure, n_ev, ev_won, staked, 0.0, start, 0.0, still_open, entries)
     peak = curve.BANKROLL.cummax().clip(lower=start)
     drawdown = float(((peak - curve.BANKROLL) / peak).max())
-    return Wallet(curve, n_sure, n_ev, ev_won, staked, equity - start, equity, drawdown, still_open)
+    return Wallet(
+        curve, n_sure, n_ev, ev_won, staked, equity - start, equity, drawdown, still_open, entries
+    )
 
 
 def window(

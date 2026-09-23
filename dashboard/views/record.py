@@ -44,11 +44,12 @@ st.caption(
 
 st.subheader("Paper wallet")
 st.caption(
-    "Put 20% of the bankroll on every surebet at or above your threshold, split "
-    "across its legs so the return is the same whichever outcome lands, and a "
-    "quarter of Kelly on every EV bet at or above yours, compounding. Surebets pay "
-    "their arithmetic; EV bets pay their real result. Assumes each price was taken "
-    "at detection, which is what an instant alert is for."
+    "A strategy simulator on the platform's own signals: pick which alerts the "
+    "wallet takes, the thresholds, the sizing and the time window, and it re-runs "
+    "the compounding bankroll bet by bet. A surebet's stake is split across its "
+    "legs so the return is the same whichever outcome lands and pays its "
+    "arithmetic; EV bets pay their real result. Assumes each price was taken at "
+    "detection, which is what an instant alert is for."
 )
 
 bets = wallet.get("bets")
@@ -56,7 +57,12 @@ now = pd.Timestamp.now(tz="UTC")
 if bets:
     surebets_all = frame(
         bets["surebets"],
-        {"detectedAt": "DETECTED_AT", "kickoffAt": "KICKOFF_AT", "arbitrage": "ARBITRAGE"},
+        {
+            "detectedAt": "DETECTED_AT",
+            "kickoffAt": "KICKOFF_AT",
+            "arbitrage": "ARBITRAGE",
+            "fixture": "FIXTURE",
+        },
         times=("DETECTED_AT", "KICKOFF_AT"),
     )
     ev_all = frame(
@@ -67,6 +73,9 @@ if bets:
             "ev": "EV",
             "odds": "ODDS",
             "verdict": "VERDICT",
+            "fixture": "FIXTURE",
+            "pick": "PICK",
+            "book": "BOOK",
         },
         times=("DETECTED_AT", "KICKOFF_AT"),
     )
@@ -115,6 +124,39 @@ if bets:
         )
     )
 
+    SIZINGS = {
+        "quarter Kelly": "quarter_kelly",
+        "half Kelly": "half_kelly",
+        "full Kelly": "kelly",
+        "flat 1% of start": "flat",
+        "2% of bankroll": "fixed_2pct",
+    }
+    s1, s2, _ = st.columns([1.3, 1, 2])
+    ev_sizing = SIZINGS[
+        s1.selectbox(
+            "EV sizing",
+            list(SIZINGS),
+            index=0,
+            help="How much of the bankroll each EV bet takes. Kelly is ev/(odds−1); "
+            "the fractions hedge a borrowed probability.",
+            disabled=kind == "Surebets",
+        )
+    ]
+    surebet_fraction = (
+        float(
+            s2.number_input(
+                "Surebet stake %",
+                min_value=1.0,
+                max_value=50.0,
+                value=20.0,
+                step=1.0,
+                help="The share of the bankroll each surebet takes, split across its legs.",
+                disabled=kind == "EV",
+            )
+        )
+        / 100.0
+    )
+
     # The window: two handles, hour steps, from the earliest published bet (the
     # publisher keeps up to `windowDays`, 90 by default) to now; opens on the
     # last two weeks. The wallet starts at the left handle and is valued at the
@@ -148,7 +190,9 @@ if bets:
     )
     ev = ev_all[ev_all.EV >= ev_min] if kind != "Surebets" else ev_all.iloc[0:0]
     surebets, ev = window(surebets, start_ts, end_ts), window(ev, start_ts, end_ts)
-    run = paper_wallet(surebets, ev, end_ts, start_amount)
+    run = paper_wallet(
+        surebets, ev, end_ts, start_amount, ev_sizing=ev_sizing, surebet_fraction=surebet_fraction
+    )
     taken = pd.concat([surebets.DETECTED_AT, ev.DETECTED_AT])
     shown = {
         "start": start_amount,
@@ -164,9 +208,11 @@ if bets:
         "to": end_ts,
     }
     curve = run.curve
+    entries = run.entries
 else:  # an older document without the bets: show what was published
     shown = wallet
     curve = points(wallet["curve"], "AT", "BANKROLL")
+    entries = None
 
 m = st.columns(6)
 m[0].metric("Bankroll now", f"${shown['final']:,.0f}", delta=f"${shown['profit']:+,.0f}")
@@ -189,8 +235,23 @@ m[5].metric("Open positions", f"{shown['openBets']:,}", help="Placed, not yet se
 if curve.empty:
     st.caption("No settled bet in this window.")
 else:
+    if entries is not None and not entries.empty:
+        entries = entries.copy()
+        # One line naming the bet, for the marker hover: the fixture, then what
+        # was backed at what price, or the surebet's locked-in edge.
+        entries["WHAT"] = [
+            (
+                f"<b>{e.FIXTURE or 'surebet'}</b><br>surebet · {e.EDGE:.1%} locked in"
+                if e.KIND == "surebet"
+                else f"<b>{e.FIXTURE or ''}</b><br>{e.PICK or '?'} @ {e.ODDS:.2f}"
+                f" · {e.BOOK or ''} · EV {e.EDGE:+.1%} · {e.VERDICT}"
+            )
+            for e in entries.itertuples(index=False)
+        ]
+        entries["SETTLED_AT"] = pd.to_datetime(entries.SETTLED_AT, utc=True).dt.tz_convert(TIMEZONE)
     st.plotly_chart(
-        swing_chart(swings(curve, start_amount), start_amount), use_container_width=True
+        swing_chart(swings(curve, start_amount), start_amount, entries=entries),
+        use_container_width=True,
     )
     since_label = (
         pd.Timestamp(shown["from"]).tz_convert(TIMEZONE) if shown.get("from") is not None else None
@@ -207,8 +268,58 @@ else:
     )
     st.caption(
         span + f"Total staked ${shown['staked']:,.0f}. Green steps are settlements that raised the "
-        "bankroll, red ones lowered it; the shading is how far under its best the wallet stood."
+        "bankroll, red ones lowered it; the shading is how far under its best the wallet stood. "
+        "Each dot is one settled bet — hover it for the fixture, the pick and what it did."
     )
+    if entries is not None and not entries.empty:
+        with st.expander(f"Every bet this strategy took · {len(entries)}", expanded=False):
+            st.caption(
+                "In settlement order: what was backed, at what price and edge, the stake the "
+                "strategy chose, and the bankroll after it settled. Entry is the detection "
+                "time — the moment the alert would have fired."
+            )
+            table = entries.copy()
+            table["Entered"] = pd.to_datetime(table.DETECTED_AT, utc=True).dt.tz_convert(TIMEZONE)
+            table["Edge"] = table.EDGE.map(lambda e: f"{e:+.1%}")
+            st.dataframe(
+                table[
+                    [
+                        "Entered",
+                        "KIND",
+                        "FIXTURE",
+                        "PICK",
+                        "BOOK",
+                        "ODDS",
+                        "Edge",
+                        "VERDICT",
+                        "STAKE",
+                        "PROFIT",
+                        "BANKROLL",
+                    ]
+                ].rename(
+                    columns={
+                        "KIND": "Signal",
+                        "FIXTURE": "Fixture",
+                        "PICK": "Pick",
+                        "BOOK": "Book",
+                        "ODDS": "Odds",
+                        "VERDICT": "Result",
+                        "STAKE": "Stake",
+                        "PROFIT": "Profit",
+                        "BANKROLL": "Bankroll after",
+                    }
+                ),
+                column_config={
+                    "Entered": st.column_config.DatetimeColumn(format="D MMM HH:mm"),
+                    "Odds": st.column_config.NumberColumn(format="%.2f"),
+                    "Stake": st.column_config.NumberColumn(format="$%.2f"),
+                    "Profit": st.column_config.NumberColumn(format="$%.2f"),
+                    "Bankroll after": st.column_config.NumberColumn(format="$%.0f"),
+                },
+                hide_index=True,
+                use_container_width=True,
+                height=320,
+            )
 
 # --- copied slips ---------------------------------------------------------------------
 

@@ -242,9 +242,13 @@ def _segments(frame: pd.DataFrame, rising: bool) -> tuple[list[Any], list[Any]]:
     return xs, ys
 
 
-def swing_chart(frame: pd.DataFrame, start: float, unit: str = "$") -> go.Figure:
+def swing_chart(
+    frame: pd.DataFrame, start: float, unit: str = "$", entries: pd.DataFrame | None = None
+) -> go.Figure:
     """A bankroll over time: every step up in green, every step down in red,
     the fall from the running peak shaded. `frame` is `backtest.swings(...)`.
+    `entries` (optional, with SETTLED_AT, BANKROLL, WHAT, STAKE, PROFIT) marks
+    each settled bet on the curve, the hover naming it.
 
     The equity curve is the one axis. Colouring each step by its direction is
     what a trader's equity chart does; the shaded drawdown says how far under
@@ -288,6 +292,27 @@ def swing_chart(frame: pd.DataFrame, start: float, unit: str = "$") -> go.Figure
                 line={"width": 2, "color": colour},
                 connectgaps=False,
                 hoverinfo="skip",
+            )
+        )
+    if entries is not None and not entries.empty:
+        colour = [GAIN if p > 0 else (LOSS if p < 0 else STALE) for p in entries.PROFIT.fillna(0.0)]
+        figure.add_trace(
+            go.Scatter(
+                x=entries.SETTLED_AT,
+                y=entries.BANKROLL,
+                mode="markers",
+                name="settled bets",
+                marker={
+                    "size": 7,
+                    "color": colour,
+                    "line": {"width": 1, "color": "rgba(255,255,255,0.75)"},
+                },
+                customdata=entries[["WHAT", "STAKE", "PROFIT"]],
+                hovertemplate=(
+                    "%{customdata[0]}<br>stake "
+                    + unit
+                    + "%{customdata[1]:,.2f} → %{customdata[2]:+,.2f}<extra></extra>"
+                ),
             )
         )
     figure.add_hline(
