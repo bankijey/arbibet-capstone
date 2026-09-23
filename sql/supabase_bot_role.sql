@@ -1,15 +1,21 @@
--- A login for the RUNNER's bot and publisher, in Supabase, instead of the
--- `postgres` superuser it uses today.
+-- A dedicated login for the RUNNER (bot + publisher) in Supabase, instead of
+-- the `postgres` admin it used at first.
 --
--- Run once in Supabase: SQL Editor -> New query -> paste -> Run. Choose the
--- password yourself where marked, never commit it, then put the new URL in
--- .env as SUPABASE_DB_URL (same host, port and database; user `arbibet_runner`)
--- and restart the runner. Keep the postgres password for yourself only.
+-- Part A (safe to run any time; scripts/apply_bot_role.py runs it over the
+-- runner's existing connection): create the role WITHOUT a login, hand it the
+-- three schemas the pipeline owns, and keep the dashboard's read access.
+-- Nothing breaks while the runner still connects as postgres: postgres has
+-- BYPASSRLS and stays a member of the new role.
 --
--- Why. Anyone or anything holding the runner's connection string can do exactly
--- what this role can. As `postgres` that is everything, including every other
--- project table and Supabase's own auth schema. As `arbibet_runner` it is the
--- three schemas the pipeline owns, and nothing else.
+-- Part B is yours alone, in the Supabase SQL editor -- the password never
+-- goes through anything else:
+--
+--     ALTER ROLE arbibet_runner LOGIN PASSWORD '<choose a strong password>';
+--
+-- Then point SUPABASE_DB_URL in .env at the same host and database with user
+-- `arbibet_runner.<project ref>` (the pooler wants role.projectref) and the
+-- new password, and restart the runner. A leaked runner secret then exposes
+-- these three schemas, not the project.
 
 CREATE SCHEMA IF NOT EXISTS serving;
 CREATE SCHEMA IF NOT EXISTS ops;
@@ -18,13 +24,15 @@ CREATE SCHEMA IF NOT EXISTS bot;
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'arbibet_runner') THEN
-        CREATE ROLE arbibet_runner LOGIN PASSWORD '<choose a strong password>';
+        CREATE ROLE arbibet_runner NOLOGIN;
     END IF;
 END
 $$;
 
--- Own the schemas and everything already in them, so the runner can still
--- create and alter its tables (ensure_schema runs at every start).
+-- postgres is not a superuser here; it must be a member of a role to hand it
+-- ownership (and it keeps admin access through that membership).
+GRANT arbibet_runner TO postgres;
+
 ALTER SCHEMA serving OWNER TO arbibet_runner;
 ALTER SCHEMA ops OWNER TO arbibet_runner;
 ALTER SCHEMA bot OWNER TO arbibet_runner;
@@ -40,7 +48,9 @@ BEGIN
         SELECT sequence_schema, sequence_name FROM information_schema.sequences
         WHERE sequence_schema IN ('serving', 'ops', 'bot')
     LOOP
-        EXECUTE format('ALTER SEQUENCE %I.%I OWNER TO arbibet_runner', r.sequence_schema, r.sequence_name);
+        EXECUTE format(
+            'ALTER SEQUENCE %I.%I OWNER TO arbibet_runner', r.sequence_schema, r.sequence_name
+        );
     END LOOP;
 END
 $$;
@@ -54,6 +64,6 @@ ALTER DEFAULT PRIVILEGES FOR ROLE arbibet_runner IN SCHEMA serving, ops
 GRANT INSERT, UPDATE ON serving.leg_flag TO dashboard_reader;
 
 -- Subscribers' data stays out of every other role's reach. RLS is on with no
--- policies; the owner bypasses it, nobody else gets a row.
+-- policies; the owner (and BYPASSRLS admins) get rows, nobody else does.
 REVOKE ALL ON SCHEMA bot FROM PUBLIC, anon, authenticated, dashboard_reader;
 REVOKE ALL ON ALL TABLES IN SCHEMA bot FROM PUBLIC, anon, authenticated, dashboard_reader;

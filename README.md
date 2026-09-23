@@ -306,11 +306,14 @@ people:
   `dashboard_reader` cannot, and the schema is not exposed through Supabase's
   REST API. Balances are numbers the user typed, not bookmaker logins: the
   bot never holds a bookmaker credential or a payment detail.
-- **Who the runner is.** Today the runner connects as Supabase's `postgres`
-  superuser. Run `sql/supabase_bot_role.sql` once to give it its own
-  `arbibet_runner` login that owns `serving`, `ops` and `bot` and nothing
-  else, then point `SUPABASE_DB_URL` at it. A leaked runner secret then
-  exposes three schemas, not the project.
+- **Who the runner is.** The runner first connected as Supabase's `postgres`
+  admin. `sql/supabase_bot_role.sql` gives it its own `arbibet_runner` role
+  that owns `serving`, `ops` and `bot` and nothing else: part A
+  (`docker exec arbibet-runner python scripts/apply_bot_role.py`) creates the
+  role without a login and moves ownership; part B is one `ALTER ROLE ...
+  LOGIN PASSWORD` you run yourself in the Supabase SQL editor, then point
+  `SUPABASE_DB_URL` at `arbibet_runner.<project ref>` and restart. A leaked
+  runner secret then exposes three schemas, not the project.
 - **Secrets.** The bot token, the Supabase URL and the OpenAI key live in
   `.env` on the pipeline machine and in Streamlit's secrets; none is in the
   repo. Rotate the bot token at BotFather if it ever appears in a log or a
@@ -356,8 +359,8 @@ docker compose up -d --build runner
 
 Streamlit secrets: `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER` and
 `SUPABASE_PASSWORD` for the `dashboard_reader` role
-(`sql/supabase_dashboard_role.sql`). The runner's own login:
-`sql/supabase_bot_role.sql`.
+(`sql/supabase_dashboard_role.sql`). The runner's own role:
+`sql/supabase_bot_role.sql` with `scripts/apply_bot_role.py`.
 
 ## Repository
 
