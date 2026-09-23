@@ -531,7 +531,15 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
         """
     )
     now = pd.Timestamp.now(tz="UTC")
-    ev = choose(settled, "first")
+    # Every settled detection travels to the page, which picks its own entry
+    # (first seen, best EV, last seen) per opportunity and, if asked, one bet
+    # per fixture. The headline stays first-seen, every opportunity.
+    detections = settled[settled.VERDICT.notna()]
+    detections = detections[
+        pd.to_datetime(detections.DETECTED_AT, utc=True)
+        > now - pd.Timedelta(days=RECORD_WINDOW_DAYS)
+    ]
+    ev = choose(detections, "first")
     ev = ev[pd.to_datetime(ev.DETECTED_AT, utc=True) > now - pd.Timedelta(days=RECORD_WINDOW_DAYS)]
     # The headline the document carries: the alerted set, at the alert threshold.
     alertable = surebets[surebets.ARBITRAGE >= SUREBET_MIN]
@@ -578,6 +586,7 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
                 "surebets": _records(
                     surebets,
                     {
+                        "EVENT_ID": "eventId",
                         "DETECTED_AT": "detectedAt",
                         "KICKOFF_AT": "kickoffAt",
                         "ARBITRAGE": "arbitrage",
@@ -585,8 +594,11 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
                     },
                 ),
                 "ev": _records(
-                    ev,
+                    detections,
                     {
+                        "EVENT_ID": "eventId",
+                        "MARKET_ID": "marketId",
+                        "OUTCOME_ID": "outcomeId",
                         "DETECTED_AT": "detectedAt",
                         "KICKOFF_AT": "kickoffAt",
                         "EV": "ev",

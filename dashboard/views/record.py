@@ -19,7 +19,7 @@ from datetime import timedelta
 
 import pandas as pd
 import streamlit as st
-from dashboard.backtest import paper_wallet, swings, window
+from dashboard.backtest import best_per_event, choose, paper_wallet, swings, window
 from dashboard.charts import swing_chart
 from dashboard.common import TIMEZONE, document, frame, points, published_at, versions
 
@@ -58,6 +58,7 @@ if bets:
     surebets_all = frame(
         bets["surebets"],
         {
+            "eventId": "EVENT_ID",
             "detectedAt": "DETECTED_AT",
             "kickoffAt": "KICKOFF_AT",
             "arbitrage": "ARBITRAGE",
@@ -68,6 +69,9 @@ if bets:
     ev_all = frame(
         bets["ev"],
         {
+            "eventId": "EVENT_ID",
+            "marketId": "MARKET_ID",
+            "outcomeId": "OUTCOME_ID",
             "detectedAt": "DETECTED_AT",
             "kickoffAt": "KICKOFF_AT",
             "ev": "EV",
@@ -131,7 +135,8 @@ if bets:
         "flat 1% of start": "flat",
         "2% of bankroll": "fixed_2pct",
     }
-    s1, s2, _ = st.columns([1.3, 1, 2])
+    ENTRIES = {"first seen": "first", "highest EV": "best", "last seen": "last"}
+    s1, s2, s3, s4 = st.columns([1.3, 1.1, 1, 1.2])
     ev_sizing = SIZINGS[
         s1.selectbox(
             "EV sizing",
@@ -142,9 +147,28 @@ if bets:
             disabled=kind == "Surebets",
         )
     ]
+    entry = ENTRIES[
+        s2.selectbox(
+            "EV entry",
+            list(ENTRIES),
+            index=0,
+            help="An opportunity is often detected many times as the price moves; this "
+            "picks which detection the wallet takes: the first it saw, the one with the "
+            "highest EV, or the last before kick-off.",
+            disabled=kind == "Surebets",
+        )
+    ]
+    one_per_event = s4.toggle(
+        "One bet per fixture",
+        value=True,
+        help="At most one bet per match: the best opportunity on it (highest EV, or "
+        "highest arbitrage for surebets). Several markets of one match settle on the "
+        "same result, so taking them all stacks correlated stakes on one outcome. "
+        "Off: every opportunity is taken.",
+    )
     surebet_fraction = (
         float(
-            s2.number_input(
+            s3.number_input(
                 "Surebet stake %",
                 min_value=1.0,
                 max_value=50.0,
@@ -190,6 +214,12 @@ if bets:
     )
     ev = ev_all[ev_all.EV >= ev_min] if kind != "Surebets" else ev_all.iloc[0:0]
     surebets, ev = window(surebets, start_ts, end_ts), window(ev, start_ts, end_ts)
+    # One detection per opportunity at the chosen entry; older documents carry
+    # only first-seen rows, which choose() then leaves as they are.
+    if {"MARKET_ID", "OUTCOME_ID"}.issubset(ev.columns) and not ev.empty:
+        ev = choose(ev, entry)
+    if one_per_event:
+        surebets, ev = best_per_event(surebets, "ARBITRAGE"), best_per_event(ev, "EV")
     run = paper_wallet(
         surebets, ev, end_ts, start_amount, ev_sizing=ev_sizing, surebet_fraction=surebet_fraction
     )

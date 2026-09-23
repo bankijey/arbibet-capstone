@@ -131,3 +131,41 @@ def test_a_surebet_with_no_free_cash_is_skipped_not_counted() -> None:
     w = paper_wallet(tied, ev, t0 + pd.Timedelta(days=3), start=1_000.0, surebet_fraction=1.0)
     assert w.surebets == 1 and len(w.entries) == 1 and w.open_bets == 0
     assert round(w.final, 2) == 1_020.0
+
+
+def test_one_bet_per_fixture_keeps_the_best_opportunity() -> None:
+    from dashboard.backtest import best_per_event
+
+    t0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
+    ev = pd.DataFrame(
+        [
+            # Two markets of the same match, and one of another.
+            {"EVENT_ID": "e1", "DETECTED_AT": t0, "EV": 0.03, "ODDS": 2.0},
+            {
+                "EVENT_ID": "e1",
+                "DETECTED_AT": t0 + pd.Timedelta(minutes=5),
+                "EV": 0.08,
+                "ODDS": 3.0,
+            },
+            {
+                "EVENT_ID": "e2",
+                "DETECTED_AT": t0 + pd.Timedelta(minutes=1),
+                "EV": 0.02,
+                "ODDS": 1.8,
+            },
+        ]
+    )
+    best = best_per_event(ev, "EV")
+    assert list(best.EVENT_ID) == ["e2", "e1"]  # back in detection order
+    assert list(best.EV) == [0.02, 0.08]  # e1 keeps its best market, not its first
+    surebets = pd.DataFrame(
+        [
+            {"EVENT_ID": "e1", "DETECTED_AT": t0, "ARBITRAGE": 1.02},
+            {"EVENT_ID": "e1", "DETECTED_AT": t0 + pd.Timedelta(minutes=2), "ARBITRAGE": 1.05},
+        ]
+    )
+    assert list(best_per_event(surebets, "ARBITRAGE").ARBITRAGE) == [1.05]
+    # Frames without the column (an older document) pass through untouched.
+    bare = ev.drop(columns=["EVENT_ID"])
+    assert best_per_event(bare, "EV") is bare
+    assert best_per_event(ev.iloc[0:0], "EV").empty

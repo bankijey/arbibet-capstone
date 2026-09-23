@@ -306,6 +306,20 @@ def paper_wallet(
     )
 
 
+def best_per_event(frame: pd.DataFrame, by: str) -> pd.DataFrame:
+    """At most one bet per fixture: the highest `by` (EV, or ARBITRAGE for
+    surebets), the earliest detection breaking ties. Several markets of one
+    match settle on the same result, so taking them all stacks correlated
+    stakes on one outcome; when it is one per event, it is always the best."""
+    if frame.empty or "EVENT_ID" not in frame.columns:
+        return frame
+    return (
+        frame.sort_values([by, "DETECTED_AT"], ascending=[False, True])
+        .drop_duplicates("EVENT_ID")
+        .sort_values("DETECTED_AT")
+    )
+
+
 def window(
     frame: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | None
 ) -> pd.DataFrame:
