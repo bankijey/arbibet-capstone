@@ -169,7 +169,9 @@ def compare(detections: pd.DataFrame) -> pd.DataFrame:
 # placed at the detected prices; it settles at kick-off plus two hours like
 # everything else. The EV bets settle on the real verdict.
 
-PAPER_START = 100_000.0
+# In dollars: a bankroll a reader anywhere can picture, and small enough that
+# the curve is about the edge, not the number of zeros.
+PAPER_START = 1_000.0
 SUREBET_MIN = 1.015
 SUREBET_FRACTION = 0.20
 
@@ -186,15 +188,18 @@ class Wallet(NamedTuple):
     open_bets: int  # placed, not yet settled at the end
 
 
-def paper_wallet(surebets: pd.DataFrame, ev: pd.DataFrame, now: pd.Timestamp) -> Wallet:
+def paper_wallet(
+    surebets: pd.DataFrame, ev: pd.DataFrame, now: pd.Timestamp, start: float = PAPER_START
+) -> Wallet:
     """`surebets`: one row per surebet (DETECTED_AT, KICKOFF_AT, ARBITRAGE), first
-    detection per market. `ev`: settled EV detections as for `choose('first')`."""
+    detection per market. `ev`: settled EV detections as for `choose('first')`.
+    `start`: the opening bankroll; every stake is a fraction of what it became."""
     events: list[tuple[pd.Timestamp, str, Any]] = [
         (pd.Timestamp(r.DETECTED_AT), "surebet", r) for r in surebets.itertuples(index=False)
     ] + [(pd.Timestamp(r.DETECTED_AT), "ev", r) for r in ev.itertuples(index=False)]
     events.sort(key=lambda e: e[0])
 
-    cash = PAPER_START
+    cash = start
     open_bets: list[tuple[pd.Timestamp, float]] = []
     points: list[tuple[pd.Timestamp, float]] = []
     staked = 0.0
@@ -233,9 +238,28 @@ def paper_wallet(surebets: pd.DataFrame, ev: pd.DataFrame, now: pd.Timestamp) ->
     curve = pd.DataFrame(points, columns=["AT", "BANKROLL"])
     equity = cash + sum(p for _, p in open_bets)
     if curve.empty:
-        return Wallet(curve, n_sure, n_ev, ev_won, staked, 0.0, PAPER_START, 0.0, still_open)
-    peak = curve.BANKROLL.cummax().clip(lower=PAPER_START)
+        return Wallet(curve, n_sure, n_ev, ev_won, staked, 0.0, start, 0.0, still_open)
+    peak = curve.BANKROLL.cummax().clip(lower=start)
     drawdown = float(((peak - curve.BANKROLL) / peak).max())
-    return Wallet(
-        curve, n_sure, n_ev, ev_won, staked, equity - PAPER_START, equity, drawdown, still_open
-    )
+    return Wallet(curve, n_sure, n_ev, ev_won, staked, equity - start, equity, drawdown, still_open)
+
+
+def since(frame: pd.DataFrame, cutoff: pd.Timestamp | None) -> pd.DataFrame:
+    """The bets detected at or after `cutoff` (None: all of them). The look-back
+    window of the track record: the wallet then opens at the cutoff and takes
+    only what was alerted from there on."""
+    if cutoff is None or frame.empty:
+        return frame
+    return frame[pd.to_datetime(frame.DETECTED_AT, utc=True) >= cutoff]
+
+
+def swings(curve: pd.DataFrame, start: float) -> pd.DataFrame:
+    """The curve with the running PEAK, the DRAWDOWN from it (a fraction) and, per
+    point, the CHANGE from the previous point -- what the swing chart colours."""
+    out = curve.copy()
+    if out.empty:
+        return out.assign(PEAK=[], DRAWDOWN=[], CHANGE=[])
+    out["PEAK"] = out.BANKROLL.cummax().clip(lower=start)
+    out["DRAWDOWN"] = (out.PEAK - out.BANKROLL) / out.PEAK
+    out["CHANGE"] = out.BANKROLL.diff().fillna(out.BANKROLL - start)
+    return out

@@ -240,14 +240,15 @@ earlier; pass 2 run against that morning's backup):
 
 | Page | Shows |
 |---|---|
-| Track record | The paper wallet on every signal; how copied slips fared |
+| Track record | The paper wallet on every signal, from any start amount over any look-back window, gains green and losses red with the drawdown shaded; how copied slips fared |
 | Market signals | Upcoming surebets with stake sizing; EV with **Fair odds** linked to the source book; backtest; market efficiency |
 | Betting slips | Most-slipped fixtures; popular slips leg by leg with AI verdicts |
-| Pipeline health | Heartbeats, hot-loop latency, failures, job durations, bot activity |
 | Event page (`/fixture?event_id=`) | One fixture: surebets and EV over time, prices, form, settled markets, punters |
 
 **Local** (`python -m streamlit run dashboard/local.py`), reading `data/local/`
-(bind-mounted from the runner): pipeline health and the match-review queue.
+(bind-mounted from the runner): pipeline health (heartbeats, failures, job
+runs; not published to the public dashboard for now), the match-review queue
+and results held back from settlement.
 Decisions are written to `decisions.json`; the runner applies them within a
 minute. Nothing local touches DuckDB or the cloud.
 
@@ -288,6 +289,41 @@ the same Supabase documents as the dashboard and never touch DuckDB.
 Create a bot with @BotFather and set `TELEGRAM_BOT_TOKEN` in `.env`; the bot
 is off without it. `TELEGRAM_ALLOWED_CHATS` optionally restricts who may use it.
 
+### Users and security
+
+A user is a Telegram chat id: no account, no password, nothing to leak but
+the id and a username. What protects them, and what to do before inviting
+people:
+
+- **Who gets in.** Anyone who finds the bot can `/start` unless
+  `TELEGRAM_ALLOWED_CHATS` lists the chats allowed. Start with a list; open it
+  up when the bot has earned it. Only the owner (`TELEGRAM_OWNER_CHAT`) has
+  `/admin`; only a user who has set a real balance is *signed* and gets
+  real-money sizing and the power to flag a match for everyone.
+- **Where their data lives.** The `bot` schema in Supabase: subscriber
+  settings, balances, bets, reports. Row-level security is on with no
+  policies, so only the table owner reads it; the dashboard's
+  `dashboard_reader` cannot, and the schema is not exposed through Supabase's
+  REST API. Balances are numbers the user typed, not bookmaker logins: the
+  bot never holds a bookmaker credential or a payment detail.
+- **Who the runner is.** Today the runner connects as Supabase's `postgres`
+  superuser. Run `sql/supabase_bot_role.sql` once to give it its own
+  `arbibet_runner` login that owns `serving`, `ops` and `bot` and nothing
+  else, then point `SUPABASE_DB_URL` at it. A leaked runner secret then
+  exposes three schemas, not the project.
+- **Secrets.** The bot token, the Supabase URL and the OpenAI key live in
+  `.env` on the pipeline machine and in Streamlit's secrets; none is in the
+  repo. Rotate the bot token at BotFather if it ever appears in a log or a
+  chat; the bot picks up the new one on restart.
+- **Abuse.** The bot answers at most 25 messages a second overall and one
+  per second per chat, and every command is a Bot API call, so a hostile
+  chat can only cost its own rate. Amounts are parsed as numbers and capped
+  by the user's own balances; nothing a user sends reaches SQL unparameterised
+  or the warehouse at all.
+- **Leaving.** `/stop` silences alerts but keeps the wallet. A user who wants
+  their data gone asks, and the owner deletes their `bot.*` rows by chat id;
+  add a `/forget` command before opening the bot widely.
+
 ## Operations
 
 ```bash
@@ -319,7 +355,9 @@ docker compose up -d --build runner
 ```
 
 Streamlit secrets: `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER` and
-`SUPABASE_PASSWORD` for the `dashboard_reader` role.
+`SUPABASE_PASSWORD` for the `dashboard_reader` role
+(`sql/supabase_dashboard_role.sql`). The runner's own login:
+`sql/supabase_bot_role.sql`.
 
 ## Repository
 
@@ -350,10 +388,13 @@ Streamlit secrets: `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER` and
   about 150 upcoming fixtures held two different matches under one id. Name
   checks find them; a model asked to judge club aliases was wrong often enough
   that exclusion is left to a person.
-- **Small edges compound.** A paper wallet on every signal since 2 September
-  2026 (surebets of 1.5% or more at 20% of bankroll, EV at quarter-Kelly) grew
-  ₦100,000 to about ₦168,000 over 13 surebets and 83 EV bets, with a 13% worst
-  drawdown. It assumes every price was taken at detection.
+- **Small edges compound, and swing.** A paper wallet on every signal since
+  2 September 2026 (surebets of 1.5% or more at 20% of bankroll, EV at
+  quarter-Kelly) grew $1,000 to about $1,720 by 23 September over 32 surebets
+  and 424 EV bets, with a 43% worst drawdown on the way. It assumes every
+  price was taken at detection. The page re-runs it from any start amount
+  and look-back window; every stake is a fraction of the bankroll, so the
+  shape is the same at any size.
 - **Popularity does not track soundness.** Of 1,520 settled copied slips, 32%
   won (27% weighted by copies) although 65% of their legs did. A slip copied
   5,739 times had a 1-in-411,956 chance.

@@ -16,9 +16,10 @@ Data: the 'record' section of the 'signals' document.
 from __future__ import annotations
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
-from dashboard.common import TIMEZONE, document, points, published_at, versions
+from dashboard.backtest import paper_wallet, since, swings
+from dashboard.charts import swing_chart
+from dashboard.common import TIMEZONE, document, frame, points, published_at, versions
 
 BOT = "https://t.me/Arbibbobobot"
 
@@ -39,43 +40,107 @@ st.caption(
 
 # --- the paper wallet ---------------------------------------------------------------
 
-st.subheader("A paper wallet on every signal")
+st.subheader("Paper wallet")
 st.caption(
-    f"Start with ₦{wallet['start']:,.0f}. Put 20% of the bankroll on every surebet of "
+    "Put 20% of the bankroll on every surebet of "
     f"{(wallet['surebetMin'] - 1):.1%} or more, split across its legs so the return is "
     "the same whichever outcome lands, and a quarter of Kelly on every positive-EV "
-    "price. Compound. Surebets pay their arithmetic; EV bets pay their real result. "
+    "price, compounding. Surebets pay their arithmetic; EV bets pay their real result. "
     "Assumes each price was taken at detection, which is what an instant alert is for."
 )
+
+LOOKBACK = {"all": None, "7 days": 7, "14 days": 14, "30 days": 30, "60 days": 60}
+c1, c2, _ = st.columns([1, 1, 3])
+start_amount = float(
+    c1.number_input(
+        "Start with ($)",
+        min_value=10.0,
+        max_value=10_000_000.0,
+        value=float(wallet["start"]),
+        step=100.0,
+        help="Every stake is a fraction of the bankroll, so the shape is the same at any size.",
+    )
+)
+window = c2.selectbox(
+    "Look back",
+    list(LOOKBACK),
+    index=0,
+    help="Take only what was alerted from then on; the wallet opens at that point.",
+)
+
+bets = wallet.get("bets")
+now = pd.Timestamp.now(tz="UTC")
+cutoff = now - pd.Timedelta(days=LOOKBACK[window]) if LOOKBACK[window] else None
+if bets:
+    surebets = since(
+        frame(
+            bets["surebets"],
+            {"detectedAt": "DETECTED_AT", "kickoffAt": "KICKOFF_AT", "arbitrage": "ARBITRAGE"},
+        ),
+        cutoff,
+    )
+    ev = since(
+        frame(
+            bets["ev"],
+            {
+                "detectedAt": "DETECTED_AT",
+                "kickoffAt": "KICKOFF_AT",
+                "ev": "EV",
+                "odds": "ODDS",
+                "verdict": "VERDICT",
+            },
+        ),
+        cutoff,
+    )
+    run = paper_wallet(surebets, ev, now, start_amount)
+    shown = {
+        "start": start_amount,
+        "final": run.final,
+        "profit": run.profit,
+        "surebets": run.surebets,
+        "evBets": run.ev_bets,
+        "evWon": run.ev_won,
+        "maxDrawdown": run.max_drawdown,
+        "openBets": run.open_bets,
+        "staked": run.staked,
+        "from": surebets.DETECTED_AT.min() if not surebets.empty else cutoff,
+    }
+    curve = run.curve
+else:  # an older document without the bets: show what was published
+    shown = wallet
+    curve = points(wallet["curve"], "AT", "BANKROLL")
+
 m = st.columns(6)
-m[0].metric("Bankroll now", f"₦{wallet['final']:,.0f}", delta=f"₦{wallet['profit']:+,.0f}")
+m[0].metric("Bankroll now", f"${shown['final']:,.0f}", delta=f"${shown['profit']:+,.0f}")
 m[1].metric(
     "Return on start",
-    f"{wallet['profit'] / wallet['start']:+.1%}",
-    help="Since the first surebet the wallet could have taken.",
+    f"{shown['profit'] / shown['start']:+.1%}",
+    help="Since the first surebet the wallet could have taken in the window.",
 )
-m[2].metric("Surebets taken", f"{wallet['surebets']:,}")
+m[2].metric("Surebets taken", f"{shown['surebets']:,}")
 m[3].metric(
     "EV bets",
-    f"{wallet['evBets']:,}",
-    help=f"{wallet['evWon']:,} won. Only settled EV bets are counted.",
+    f"{shown['evBets']:,}",
+    help=f"{shown['evWon']:,} won. Only settled EV bets are counted.",
 )
-m[4].metric("Worst drawdown", f"{wallet['maxDrawdown']:.1%}")
-m[5].metric("Open positions", f"{wallet['openBets']:,}", help="Placed, not yet kicked off.")
+m[4].metric(
+    "Worst drawdown", f"{shown['maxDrawdown']:.1%}", help="The deepest fall from a running peak."
+)
+m[5].metric("Open positions", f"{shown['openBets']:,}", help="Placed, not yet settled.")
 
-curve = points(wallet["curve"], "AT", "BANKROLL")
 if curve.empty:
-    st.caption("No settled bet yet.")
+    st.caption("No settled bet in this window.")
 else:
-    fig = px.line(curve, x="AT", y="BANKROLL", height=320)
-    fig.add_hline(y=wallet["start"], line_dash="dot", line_color="grey")
-    fig.update_layout(
-        margin={"t": 10, "b": 0, "l": 0, "r": 0}, xaxis_title="", yaxis_title="bankroll (₦)"
+    st.plotly_chart(
+        swing_chart(swings(curve, start_amount), start_amount), use_container_width=True
     )
-    st.plotly_chart(fig, use_container_width=True)
+    since_label = (
+        pd.Timestamp(shown["from"]).tz_convert(TIMEZONE) if shown.get("from") is not None else None
+    )
     st.caption(
-        f"From {pd.Timestamp(wallet['from']).tz_convert(TIMEZONE):%d %b} to now, in "
-        f"platform time. Total staked ₦{wallet['staked']:,.0f}."
+        (f"From {since_label:%d %b} to now, in platform time. " if since_label is not None else "")
+        + f"Total staked ${shown['staked']:,.0f}. Green steps are settlements that raised the "
+        "bankroll, red ones lowered it; the shading is how far under its best the wallet stood."
     )
 
 # --- copied slips ---------------------------------------------------------------------

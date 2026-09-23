@@ -100,11 +100,9 @@ navigation = st.navigation(
             title="Betting slips",
             url_path="slips",
         ),
-        st.Page(
-            "views/health.py",
-            title="Pipeline health",
-            url_path="health",
-        ),
+        # Pipeline health is not offered to the public for now: it lives on the
+        # local dashboard (dashboard/local.py), on the pipeline machine. The
+        # view is kept; put it back here to publish it again.
         # Reached from a deep-dive card on the slips page, never from the
         # sidebar: a page that needs a fixture chosen first has no business in
         # the navigation. Hidden, but still routable, so `/fixture?event_id=`

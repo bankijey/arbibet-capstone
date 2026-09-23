@@ -67,3 +67,40 @@ def test_compare_covers_every_strategy() -> None:
     table = compare(bets)
     assert len(table) == 15
     assert set(table.sizing) == {"flat", "fixed_2pct", "kelly", "half_kelly", "quarter_kelly"}
+
+
+def test_paper_wallet_scales_with_its_start_and_a_lookback_window() -> None:
+    from dashboard.backtest import paper_wallet, since, swings
+
+    t0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
+    surebets = pd.DataFrame(
+        {
+            "DETECTED_AT": [t0, t0 + pd.Timedelta(days=10)],
+            "KICKOFF_AT": [t0 + pd.Timedelta(hours=1), t0 + pd.Timedelta(days=10, hours=1)],
+            "ARBITRAGE": [1.02, 1.05],
+        }
+    )
+    ev = pd.DataFrame(columns=["DETECTED_AT", "KICKOFF_AT", "EV", "ODDS", "VERDICT"])
+    now = t0 + pd.Timedelta(days=20)
+    small = paper_wallet(surebets, ev, now, start=1_000.0)
+    big = paper_wallet(surebets, ev, now, start=100_000.0)
+    # 20% of the bankroll at 2%, then 20% of the new bankroll at 5%: the same
+    # shape at any size, so profit is proportional to the start.
+    assert small.surebets == 2 and round(small.profit, 2) == round(big.profit / 100, 2)
+    assert round(small.final, 2) == round(1_000 * (1 + 0.2 * 0.02) * (1 + 0.2 * 0.05), 2)
+    # Looking back only 12 days leaves the first surebet out; the wallet opens then.
+    later = paper_wallet(since(surebets, now - pd.Timedelta(days=12)), ev, now, start=1_000.0)
+    assert later.surebets == 1 and round(later.final, 2) == 1_010.0
+    assert since(surebets, None) is surebets
+
+    curve = pd.DataFrame(
+        {
+            "AT": [t0, t0 + pd.Timedelta(days=1), t0 + pd.Timedelta(days=2)],
+            "BANKROLL": [1_050.0, 900.0, 950.0],
+        }
+    )
+    s = swings(curve, 1_000.0)
+    assert list(s.PEAK) == [1_050.0, 1_050.0, 1_050.0]
+    assert [round(c, 1) for c in s.CHANGE] == [50.0, -150.0, 50.0]
+    assert round(float(s.DRAWDOWN.max()), 4) == round(150 / 1_050, 4)
+    assert swings(curve.iloc[:0], 1_000.0).empty

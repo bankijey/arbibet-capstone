@@ -173,14 +173,14 @@ def test_paper_wallet_compounds_surebets_and_settles_ev():
         ]
     )
     w = paper_wallet(surebets, ev, NOW + timedelta(days=1))
-    # First surebet: 20% of 100,000 at 1.02 -> +400, still open when the EV bet is
-    # placed, so that bankroll is 80,000 cash + 20,400 due. Quarter-Kelly of it at
-    # EV 0.10 on evens is 2.5%: 2,510 staked, won at 2.0. The second surebet then
+    # First surebet: 20% of the start at 1.02 -> +0.4%, still open when the EV bet is
+    # placed, so that bankroll is 80% cash + 20.4% due. Quarter-Kelly of it at
+    # EV 0.10 on evens is 2.5%, won at 2.0. The second surebet then
     # compounds on everything settled.
-    ev_stake = (PAPER_START - 20_000 + 20_400) * 0.025
-    second = (PAPER_START + 400 + ev_stake) * 0.20 * 0.05
+    ev_stake = (PAPER_START - PAPER_START * 0.20 + PAPER_START * 0.20 * 1.02) * 0.025
+    second = (PAPER_START * 1.004 + ev_stake) * 0.20 * 0.05
     assert w.surebets == 2 and w.ev_bets == 1 and w.ev_won == 1
-    assert w.final == pytest.approx(PAPER_START + 400 + ev_stake + second)
+    assert w.final == pytest.approx(PAPER_START * 1.004 + ev_stake + second)
     assert w.open_bets == 0 and w.max_drawdown == 0
     empty = paper_wallet(surebets.iloc[:0], ev.iloc[:0], NOW)
     assert empty.final == PAPER_START and empty.curve.empty

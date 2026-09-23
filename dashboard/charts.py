@@ -17,6 +17,10 @@ from dashboard.series import MAX_LEG_SPREAD_SECONDS, POINTS, reduce_steps
 DETECTED = "#c0392b"
 STALE = "#9aa0a6"
 LINE = "#1f6feb"
+# Status colours (dataviz palette): a gain or a loss is a state, not a series.
+GAIN = "#0ca30c"
+LOSS = "#d03b3b"
+LOSS_FILL = "rgba(208, 59, 59, 0.16)"
 
 
 def _kickoff_line(figure: go.Figure, kickoff_at: Any) -> None:
@@ -220,6 +224,86 @@ def odds_chart(
         margin={"t": 20, "b": 0, "l": 0, "r": 0},
         legend={"orientation": "h", "y": -0.2},
         hovermode="closest",
+    )
+    return figure
+
+
+def _segments(frame: pd.DataFrame, rising: bool) -> tuple[list[Any], list[Any]]:
+    """The x and y of every step in one direction, None between steps so the
+    trace draws them as separate strokes."""
+    xs: list[Any] = []
+    ys: list[Any] = []
+    previous = None
+    for point in frame.itertuples(index=False):
+        if previous is not None and ((point.CHANGE >= 0) == rising):
+            xs += [previous.AT, point.AT, None]
+            ys += [previous.BANKROLL, point.BANKROLL, None]
+        previous = point
+    return xs, ys
+
+
+def swing_chart(frame: pd.DataFrame, start: float, unit: str = "$") -> go.Figure:
+    """A bankroll over time: every step up in green, every step down in red,
+    the fall from the running peak shaded. `frame` is `backtest.swings(...)`.
+
+    The equity curve is the one axis. Colouring each step by its direction is
+    what a trader's equity chart does; the shaded drawdown says how far under
+    its best the wallet was at any moment, which the line alone hides.
+    """
+    figure = go.Figure()
+    figure.add_trace(
+        go.Scatter(
+            x=frame.AT,
+            y=frame.PEAK,
+            mode="lines",
+            line={"width": 0},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    figure.add_trace(
+        go.Scatter(
+            x=frame.AT,
+            y=frame.BANKROLL,
+            mode="lines",
+            name="drawdown from peak",
+            line={"width": 0.5, "color": STALE},
+            fill="tonexty",
+            fillcolor=LOSS_FILL,
+            customdata=frame[["CHANGE", "DRAWDOWN"]],
+            hovertemplate=(
+                f"{unit}%{{y:,.2f}} · %{{customdata[0]:+,.2f}}<br>"
+                "%{customdata[1]:.1%} under its peak<extra></extra>"
+            ),
+        )
+    )
+    for rising, name, colour in ((True, "gains ▲", GAIN), (False, "losses ▼", LOSS)):
+        xs, ys = _segments(frame, rising)
+        figure.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                name=name,
+                line={"width": 2, "color": colour},
+                connectgaps=False,
+                hoverinfo="skip",
+            )
+        )
+    figure.add_hline(
+        y=start,
+        line_dash="dot",
+        line_color="#888",
+        annotation_text=f"start {unit}{start:,.0f}",
+        annotation_position="bottom right",
+    )
+    figure.update_layout(
+        height=340,
+        margin={"t": 10, "b": 0, "l": 0, "r": 0},
+        xaxis_title="",
+        yaxis_title=f"bankroll ({unit})",
+        legend={"orientation": "h", "y": 1.08, "x": 0},
+        hovermode="x unified",
     )
     return figure
 

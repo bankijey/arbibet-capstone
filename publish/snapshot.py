@@ -60,6 +60,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from dashboard.backtest import (  # noqa: E402
+    PAPER_START,
     SIZINGS,
     SUREBET_MIN,
     TIMINGS,
@@ -354,7 +355,7 @@ def signals(wh: Warehouse) -> dict[str, Any]:
     settled = wh.query(
         """
         SELECT signal_key, event_id, market_id, outcome_id, bookmaker_name, odds, ev,
-               detected_at, kickoff_at, verdict
+               detected_at, kickoff_at, verdict, fixture, outcome_name
         FROM ANALYTICS.gold_ev_settled
         """
     )
@@ -547,7 +548,7 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
     legs = int(slips.LEGS.sum()) if not slips.empty else 0
     return {
         "wallet": {
-            "start": 100_000.0,
+            "start": PAPER_START,
             "surebetMin": SUREBET_MIN,
             "surebets": wallet.surebets,
             "evBets": wallet.ev_bets,
@@ -559,6 +560,32 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
             "openBets": wallet.open_bets,
             "from": _iso(surebets.DETECTED_AT.min()) if not surebets.empty else None,
             "curve": _points(wallet.curve, "AT", "BANKROLL"),
+            # The wallet's inputs, so the page can re-run it from any start
+            # amount and over any look-back window (dashboard/backtest.py).
+            "bets": {
+                "surebets": _records(
+                    surebets,
+                    {
+                        "DETECTED_AT": "detectedAt",
+                        "KICKOFF_AT": "kickoffAt",
+                        "ARBITRAGE": "arbitrage",
+                        "FIXTURE": "fixture",
+                    },
+                ),
+                "ev": _records(
+                    ev,
+                    {
+                        "DETECTED_AT": "detectedAt",
+                        "KICKOFF_AT": "kickoffAt",
+                        "EV": "ev",
+                        "ODDS": "odds",
+                        "VERDICT": "verdict",
+                        "FIXTURE": "fixture",
+                        "OUTCOME_NAME": "pick",
+                        "BOOKMAKER_NAME": "book",
+                    },
+                ),
+            },
         },
         "slips": {
             "settled": int(len(slips)),
