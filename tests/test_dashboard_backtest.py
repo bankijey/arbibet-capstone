@@ -169,3 +169,24 @@ def test_one_bet_per_fixture_keeps_the_best_opportunity() -> None:
     bare = ev.drop(columns=["EVENT_ID"])
     assert best_per_event(bare, "EV") is bare
     assert best_per_event(ev.iloc[0:0], "EV").empty
+
+
+def test_an_older_document_without_event_ids_is_not_collapsed() -> None:
+    from dashboard.backtest import best_per_event
+
+    t0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
+    old = pd.DataFrame(
+        [
+            {"EVENT_ID": None, "DETECTED_AT": t0, "EV": 0.03},
+            {"EVENT_ID": None, "DETECTED_AT": t0 + pd.Timedelta(minutes=5), "EV": 0.08},
+        ]
+    )
+    assert len(best_per_event(old, "EV")) == 2
+    mixed = pd.DataFrame(
+        [
+            {"EVENT_ID": "e1", "DETECTED_AT": t0, "EV": 0.03},
+            {"EVENT_ID": "e1", "DETECTED_AT": t0 + pd.Timedelta(minutes=5), "EV": 0.08},
+            {"EVENT_ID": None, "DETECTED_AT": t0 + pd.Timedelta(minutes=6), "EV": 0.01},
+        ]
+    )
+    assert len(best_per_event(mixed, "EV")) == 2  # e1 deduped, the unknown row kept

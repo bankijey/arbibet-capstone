@@ -311,13 +311,13 @@ def best_per_event(frame: pd.DataFrame, by: str) -> pd.DataFrame:
     surebets), the earliest detection breaking ties. Several markets of one
     match settle on the same result, so taking them all stacks correlated
     stakes on one outcome; when it is one per event, it is always the best."""
-    if frame.empty or "EVENT_ID" not in frame.columns:
-        return frame
-    return (
-        frame.sort_values([by, "DETECTED_AT"], ascending=[False, True])
-        .drop_duplicates("EVENT_ID")
-        .sort_values("DETECTED_AT")
+    if frame.empty or "EVENT_ID" not in frame.columns or frame.EVENT_ID.isna().all():
+        return frame  # an older document names no events; nothing to group by
+    known = frame[frame.EVENT_ID.notna()]
+    best = known.sort_values([by, "DETECTED_AT"], ascending=[False, True]).drop_duplicates(
+        "EVENT_ID"
     )
+    return pd.concat([best, frame[frame.EVENT_ID.isna()]]).sort_values("DETECTED_AT")
 
 
 def window(

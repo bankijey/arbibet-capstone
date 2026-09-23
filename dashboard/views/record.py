@@ -216,7 +216,7 @@ if bets:
     surebets, ev = window(surebets, start_ts, end_ts), window(ev, start_ts, end_ts)
     # One detection per opportunity at the chosen entry; older documents carry
     # only first-seen rows, which choose() then leaves as they are.
-    if {"MARKET_ID", "OUTCOME_ID"}.issubset(ev.columns) and not ev.empty:
+    if not ev.empty and "MARKET_ID" in ev.columns and ev.MARKET_ID.notna().any():
         ev = choose(ev, entry)
     if one_per_event:
         surebets, ev = best_per_event(surebets, "ARBITRAGE"), best_per_event(ev, "EV")
