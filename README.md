@@ -240,7 +240,7 @@ earlier; pass 2 run against that morning's backup):
 
 | Page | Shows |
 |---|---|
-| Track record | The paper wallet on every signal, from any start amount over any look-back window, gains green and losses red with the drawdown shaded; how copied slips fared |
+| Track record | The paper wallet re-run in the browser: any bankroll, a two-handle time window (hour steps, up to `RECORD_WINDOW_DAYS`, default 90), surebets and/or EV with adjustable thresholds; gains green, losses red, drawdown shaded. How copied slips fared |
 | Market signals | Upcoming surebets with stake sizing; EV with **Fair odds** linked to the source book; backtest; market efficiency |
 | Betting slips | Most-slipped fixtures; popular slips leg by leg with AI verdicts |
 | Event page (`/fixture?event_id=`) | One fixture: surebets and EV over time, prices, form, settled markets, punters |
@@ -392,9 +392,11 @@ Streamlit secrets: `SUPABASE_HOST`, `SUPABASE_PORT`, `SUPABASE_USER` and
   2 September 2026 (surebets of 1.5% or more at 20% of bankroll, EV at
   quarter-Kelly) grew $1,000 to about $1,720 by 23 September over 32 surebets
   and 424 EV bets, with a 43% worst drawdown on the way. It assumes every
-  price was taken at detection. The page re-runs it from any start amount
-  and look-back window; every stake is a fraction of the bankroll, so the
-  shape is the same at any size.
+  price was taken at detection. The page re-runs it from any bankroll, over
+  any time window down to single hours, for surebets and/or EV at adjustable
+  thresholds; every stake is a fraction of the bankroll, so the shape is the
+  same at any size. Surebets alone compound with no drawdown; the EV side is
+  where the swings live.
 - **Popularity does not track soundness.** Of 1,520 settled copied slips, 32%
   won (27% weighted by copies) although 65% of their legs did. A slip copied
   5,739 times had a 1-in-411,956 chance.

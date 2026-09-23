@@ -244,13 +244,22 @@ def paper_wallet(
     return Wallet(curve, n_sure, n_ev, ev_won, staked, equity - start, equity, drawdown, still_open)
 
 
-def since(frame: pd.DataFrame, cutoff: pd.Timestamp | None) -> pd.DataFrame:
-    """The bets detected at or after `cutoff` (None: all of them). The look-back
-    window of the track record: the wallet then opens at the cutoff and takes
-    only what was alerted from there on."""
-    if cutoff is None or frame.empty:
+def window(
+    frame: pd.DataFrame, start: pd.Timestamp | None, end: pd.Timestamp | None
+) -> pd.DataFrame:
+    """The bets detected inside [start, end] (either side None: unbounded). The
+    track record's window: the wallet opens at `start`, takes only what was
+    alerted up to `end`, and is valued at `end` -- pass `end` as the wallet's
+    `now` so bets still open then stay open."""
+    if frame.empty or (start is None and end is None):
         return frame
-    return frame[pd.to_datetime(frame.DETECTED_AT, utc=True) >= cutoff]
+    at = pd.to_datetime(frame.DETECTED_AT, utc=True)
+    mask = at.notna()
+    if start is not None:
+        mask &= at >= start
+    if end is not None:
+        mask &= at <= end
+    return frame[mask]
 
 
 def swings(curve: pd.DataFrame, start: float) -> pd.DataFrame:

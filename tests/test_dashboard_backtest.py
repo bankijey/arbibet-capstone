@@ -70,7 +70,7 @@ def test_compare_covers_every_strategy() -> None:
 
 
 def test_paper_wallet_scales_with_its_start_and_a_lookback_window() -> None:
-    from dashboard.backtest import paper_wallet, since, swings
+    from dashboard.backtest import paper_wallet, swings, window
 
     t0 = pd.Timestamp("2026-09-01 12:00", tz="UTC")
     surebets = pd.DataFrame(
@@ -88,10 +88,15 @@ def test_paper_wallet_scales_with_its_start_and_a_lookback_window() -> None:
     # shape at any size, so profit is proportional to the start.
     assert small.surebets == 2 and round(small.profit, 2) == round(big.profit / 100, 2)
     assert round(small.final, 2) == round(1_000 * (1 + 0.2 * 0.02) * (1 + 0.2 * 0.05), 2)
-    # Looking back only 12 days leaves the first surebet out; the wallet opens then.
-    later = paper_wallet(since(surebets, now - pd.Timedelta(days=12)), ev, now, start=1_000.0)
+    # A window starting 12 days back leaves the first surebet out; one ending
+    # before the second leaves that one out, and the wallet is valued at the end.
+    later = paper_wallet(window(surebets, now - pd.Timedelta(days=12), now), ev, now, start=1_000.0)
     assert later.surebets == 1 and round(later.final, 2) == 1_010.0
-    assert since(surebets, None) is surebets
+    early_end = t0 + pd.Timedelta(days=5)
+    early = paper_wallet(window(surebets, None, early_end), ev, early_end, start=1_000.0)
+    assert early.surebets == 1 and round(early.final, 2) == 1_004.0
+    assert window(surebets, None, None) is surebets
+    assert list(window(surebets, t0, t0).ARBITRAGE) == [1.02]
 
     curve = pd.DataFrame(
         {

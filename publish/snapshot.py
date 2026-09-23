@@ -84,6 +84,11 @@ TIMEZONE = "Europe/Berlin"
 UPCOMING_DIVES = 15  # ten are shown; the rest cover fixtures kicking off before the next run
 RECENT_DIVES = 30  # played since the newest archived day, most-slipped first
 SLIP_CARDS = 25  # per side, re-split by the clock in the browser
+# The track record's bets travel to the page so it can re-run the wallet with
+# its own window and thresholds. The floor is what is PUBLISHED; the page's
+# threshold control cannot go below it, and the headline still uses SUREBET_MIN.
+SUREBET_PUBLISH_FLOOR = float(os.environ.get("SUREBET_PUBLISH_FLOOR", "1.005"))
+RECORD_WINDOW_DAYS = int(os.environ.get("RECORD_WINDOW_DAYS", "90"))
 PICKS = 150  # biggest winning and losing picks each, for the scatter
 DIVE_MARKETS = 10  # busiest markets charted per deep dive
 FORM_WINDOW = 10
@@ -518,14 +523,19 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
                f.home_team || ' v ' || f.away_team AS fixture
         FROM ANALYTICS.stg_arbitrage_signal s
         JOIN CORE.dim_fixture f ON f.event_id = s.event_id
-        WHERE s.is_surebet AND s.arbitrage >= {SUREBET_MIN} AND s.detected_at < f.kickoff_at
+        WHERE s.is_surebet AND s.arbitrage >= {SUREBET_PUBLISH_FLOOR}
+          AND s.detected_at < f.kickoff_at
+          AND s.detected_at > current_timestamp - to_days({RECORD_WINDOW_DAYS})
         QUALIFY row_number() OVER (PARTITION BY s.event_id, s.market_id ORDER BY s.detected_at) = 1
         ORDER BY s.detected_at
         """
     )
     now = pd.Timestamp.now(tz="UTC")
     ev = choose(settled, "first")
-    wallet = paper_wallet(surebets, ev, now)
+    ev = ev[pd.to_datetime(ev.DETECTED_AT, utc=True) > now - pd.Timedelta(days=RECORD_WINDOW_DAYS)]
+    # The headline the document carries: the alerted set, at the alert threshold.
+    alertable = surebets[surebets.ARBITRAGE >= SUREBET_MIN]
+    wallet = paper_wallet(alertable, ev, now)
     slips = wh.query(
         """
         SELECT o.share_code, c.followed_times, o.legs, o.won, o.lost, o.combined_odds,
@@ -558,7 +568,9 @@ def record(wh: Warehouse, settled: pd.DataFrame) -> dict[str, Any]:
             "final": _clean(wallet.final),
             "maxDrawdown": _clean(wallet.max_drawdown),
             "openBets": wallet.open_bets,
-            "from": _iso(surebets.DETECTED_AT.min()) if not surebets.empty else None,
+            "from": _iso(alertable.DETECTED_AT.min()) if not alertable.empty else None,
+            "windowDays": RECORD_WINDOW_DAYS,
+            "surebetFloor": SUREBET_PUBLISH_FLOOR,
             "curve": _points(wallet.curve, "AT", "BANKROLL"),
             # The wallet's inputs, so the page can re-run it from any start
             # amount and over any look-back window (dashboard/backtest.py).

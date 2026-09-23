@@ -15,9 +15,11 @@ Data: the 'record' section of the 'signals' document.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pandas as pd
 import streamlit as st
-from dashboard.backtest import paper_wallet, since, swings
+from dashboard.backtest import paper_wallet, swings, window
 from dashboard.charts import swing_chart
 from dashboard.common import TIMEZONE, document, frame, points, published_at, versions
 
@@ -42,57 +44,112 @@ st.caption(
 
 st.subheader("Paper wallet")
 st.caption(
-    "Put 20% of the bankroll on every surebet of "
-    f"{(wallet['surebetMin'] - 1):.1%} or more, split across its legs so the return is "
-    "the same whichever outcome lands, and a quarter of Kelly on every positive-EV "
-    "price, compounding. Surebets pay their arithmetic; EV bets pay their real result. "
-    "Assumes each price was taken at detection, which is what an instant alert is for."
-)
-
-LOOKBACK = {"all": None, "7 days": 7, "14 days": 14, "30 days": 30, "60 days": 60}
-c1, c2, _ = st.columns([1, 1, 3])
-start_amount = float(
-    c1.number_input(
-        "Start with ($)",
-        min_value=10.0,
-        max_value=10_000_000.0,
-        value=float(wallet["start"]),
-        step=100.0,
-        help="Every stake is a fraction of the bankroll, so the shape is the same at any size.",
-    )
-)
-window = c2.selectbox(
-    "Look back",
-    list(LOOKBACK),
-    index=0,
-    help="Take only what was alerted from then on; the wallet opens at that point.",
+    "Put 20% of the bankroll on every surebet at or above your threshold, split "
+    "across its legs so the return is the same whichever outcome lands, and a "
+    "quarter of Kelly on every EV bet at or above yours, compounding. Surebets pay "
+    "their arithmetic; EV bets pay their real result. Assumes each price was taken "
+    "at detection, which is what an instant alert is for."
 )
 
 bets = wallet.get("bets")
 now = pd.Timestamp.now(tz="UTC")
-cutoff = now - pd.Timedelta(days=LOOKBACK[window]) if LOOKBACK[window] else None
 if bets:
-    surebets = since(
-        frame(
-            bets["surebets"],
-            {"detectedAt": "DETECTED_AT", "kickoffAt": "KICKOFF_AT", "arbitrage": "ARBITRAGE"},
-        ),
-        cutoff,
+    surebets_all = frame(
+        bets["surebets"],
+        {"detectedAt": "DETECTED_AT", "kickoffAt": "KICKOFF_AT", "arbitrage": "ARBITRAGE"},
+        times=("DETECTED_AT", "KICKOFF_AT"),
     )
-    ev = since(
-        frame(
-            bets["ev"],
-            {
-                "detectedAt": "DETECTED_AT",
-                "kickoffAt": "KICKOFF_AT",
-                "ev": "EV",
-                "odds": "ODDS",
-                "verdict": "VERDICT",
-            },
-        ),
-        cutoff,
+    ev_all = frame(
+        bets["ev"],
+        {
+            "detectedAt": "DETECTED_AT",
+            "kickoffAt": "KICKOFF_AT",
+            "ev": "EV",
+            "odds": "ODDS",
+            "verdict": "VERDICT",
+        },
+        times=("DETECTED_AT", "KICKOFF_AT"),
     )
-    run = paper_wallet(surebets, ev, now, start_amount)
+
+    c1, c2, c3, c4 = st.columns([1.2, 1.3, 1, 1])
+    start_amount = float(
+        c1.number_input(
+            "Bankroll ($)",
+            min_value=10.0,
+            max_value=10_000_000.0,
+            value=float(wallet["start"]),
+            step=100.0,
+            help="Every stake is a fraction of the bankroll, so the shape is the same at any size.",
+        )
+    )
+    kind = c2.segmented_control(
+        "Signals",
+        ["Both", "Surebets", "EV"],
+        default="Both",
+        help="Which alerts the wallet takes.",
+    )
+    floor = float(wallet.get("surebetFloor") or 1.005)
+    arb_min = float(
+        c3.number_input(
+            "Surebets ≥",
+            min_value=floor,
+            max_value=1.2,
+            value=1.012,
+            step=0.001,
+            format="%.3f",
+            help="Take only surebets whose guaranteed multiple is at least this. "
+            "1.012 = 1.2% locked in.",
+            disabled=kind == "EV",
+        )
+    )
+    ev_min = float(
+        c4.number_input(
+            "EV ≥",
+            min_value=0.0,
+            max_value=0.5,
+            value=0.015,
+            step=0.005,
+            format="%.3f",
+            help="Take only EV bets with at least this edge. 0.015 = 1.5%, the bot's default.",
+            disabled=kind == "Surebets",
+        )
+    )
+
+    # The window: two handles, hour steps, from the earliest published bet (the
+    # publisher keeps up to `windowDays`, 90 by default) to now; opens on the
+    # last two weeks. The wallet starts at the left handle and is valued at the
+    # right one, so bets still open there show as open positions.
+    detected = pd.concat([surebets_all.DETECTED_AT, ev_all.DETECTED_AT])
+    earliest = detected.min() if detected.notna().any() else now - pd.Timedelta(days=14)
+    window_days = int(wallet.get("windowDays") or 90)
+    lo = max(pd.Timestamp(earliest).floor("h"), now - pd.Timedelta(days=window_days))
+    hi = now.ceil("h")
+    default_start = max(lo, hi - pd.Timedelta(days=14))
+    start_at, end_at = st.slider(
+        "Window",
+        min_value=lo.tz_convert(TIMEZONE).to_pydatetime(),
+        max_value=hi.tz_convert(TIMEZONE).to_pydatetime(),
+        value=(
+            default_start.tz_convert(TIMEZONE).to_pydatetime(),
+            hi.tz_convert(TIMEZONE).to_pydatetime(),
+        ),
+        step=timedelta(hours=1),
+        format="D MMM HH:mm",
+        help="Drag either handle; hour steps. The wallet takes only signals raised "
+        "inside the window and is valued at its end.",
+    )
+    start_ts, end_ts = (
+        pd.Timestamp(start_at).tz_convert("UTC"),
+        min(pd.Timestamp(end_at).tz_convert("UTC"), now),
+    )
+
+    surebets = (
+        surebets_all[surebets_all.ARBITRAGE >= arb_min] if kind != "EV" else surebets_all.iloc[0:0]
+    )
+    ev = ev_all[ev_all.EV >= ev_min] if kind != "Surebets" else ev_all.iloc[0:0]
+    surebets, ev = window(surebets, start_ts, end_ts), window(ev, start_ts, end_ts)
+    run = paper_wallet(surebets, ev, end_ts, start_amount)
+    taken = pd.concat([surebets.DETECTED_AT, ev.DETECTED_AT])
     shown = {
         "start": start_amount,
         "final": run.final,
@@ -103,7 +160,8 @@ if bets:
         "maxDrawdown": run.max_drawdown,
         "openBets": run.open_bets,
         "staked": run.staked,
-        "from": surebets.DETECTED_AT.min() if not surebets.empty else cutoff,
+        "from": taken.min() if taken.notna().any() else start_ts,
+        "to": end_ts,
     }
     curve = run.curve
 else:  # an older document without the bets: show what was published
@@ -115,7 +173,7 @@ m[0].metric("Bankroll now", f"${shown['final']:,.0f}", delta=f"${shown['profit']
 m[1].metric(
     "Return on start",
     f"{shown['profit'] / shown['start']:+.1%}",
-    help="Since the first surebet the wallet could have taken in the window.",
+    help="Since the first signal the wallet could have taken in the window.",
 )
 m[2].metric("Surebets taken", f"{shown['surebets']:,}")
 m[3].metric(
@@ -137,9 +195,18 @@ else:
     since_label = (
         pd.Timestamp(shown["from"]).tz_convert(TIMEZONE) if shown.get("from") is not None else None
     )
+    to_label = (
+        pd.Timestamp(shown["to"]).tz_convert(TIMEZONE) if shown.get("to") is not None else None
+    )
+    span = (
+        f"From {since_label:%d %b %H:%M} to "
+        + (f"{to_label:%d %b %H:%M}" if to_label is not None else "now")
+        + ", in platform time. "
+        if since_label is not None
+        else ""
+    )
     st.caption(
-        (f"From {since_label:%d %b} to now, in platform time. " if since_label is not None else "")
-        + f"Total staked ${shown['staked']:,.0f}. Green steps are settlements that raised the "
+        span + f"Total staked ${shown['staked']:,.0f}. Green steps are settlements that raised the "
         "bankroll, red ones lowered it; the shading is how far under its best the wallet stood."
     )
 
