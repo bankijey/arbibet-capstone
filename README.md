@@ -29,8 +29,10 @@ Dashboard: <https://arbibet.streamlit.app> · Bot: `@Arbibbobobot`
   alert, table row and slip leg links to it.
 - **Settles history.** Match statistics and 6.2M settled team markets from
   API-Football give each slip leg and fixture a measured base rate.
-- **Explains.** `gpt-4o-mini` writes pre-match briefs, slip verdicts and
+- **Explains.** `gpt-4o-mini` wrote pre-match briefs, slip verdicts and
   post-match notes from warehouse data only, shown beside the numbers they cite.
+  Paused since 5 October 2026: the four AI jobs are skipped unless
+  `AI_SUMMARIES=1`; what they already wrote is still published.
 - **Guards against wrong matches.** Books that seem to price a different match
   under a fixture's id are queued for review; a person excludes them, locally
   or from Telegram.
@@ -133,7 +135,7 @@ writer. Every job, including dbt and Spark, runs inside it.
 | Loop | Trigger | Work |
 |---|---|---|
 | Hot | NOTIFY from bronze; 15 s poll fallback | Recompute arbitrage and EV for the changed fixture, store, alert, publish |
-| Warm | :00, :15, :30, :45 (an overrun starts the next at once) | Dimensions, match checks, slips, price history, arbitrage tracking, live state, settlement pass 1 (and pass 2 hourly), dbt, AI summaries, bet settlement, publish |
+| Warm | :00, :15, :30, :45 (an overrun starts the next at once) | Dimensions, match checks, slips, price history, arbitrage tracking, live state, settlement pass 1 (and pass 2 hourly), dbt, AI summaries (paused unless `AI_SUMMARIES=1`), bet settlement, publish |
 | Cold | Daily 06:00 Berlin | Spark flatten and settle, settlement pass 2, dbt build and tests, slip compaction, backup, pruning |
 
 - Writes are MERGEs on natural keys, so any job can be re-run. A failed job is

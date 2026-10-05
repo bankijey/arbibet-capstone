@@ -698,14 +698,28 @@ def slips(wh: Warehouse) -> dict[str, Any]:
         ORDER BY p.slips DESC
         """
     )
+    # Every slip, with its AI verdict where one was written. Cards used to be
+    # read FROM the verdict table, so a slip without a verdict never showed;
+    # with the AI jobs paused that would empty the page within a day.
     cards = wh.query(
         """
-        SELECT s.share_code, s.followed_times, s.legs, s.legs_with_history, s.summary,
+        WITH slip AS (
+            SELECT share_code, max(followed_times) AS followed_times,
+                   count(*) FILTER (WHERE history_matches > 0) AS legs_with_history
+            FROM ANALYTICS.gold_slip_leg_history
+            GROUP BY 1
+        ),
+        verdict AS (
+            SELECT share_code, summary
+            FROM CORE.gold_slip_summary_ai
+            QUALIFY row_number() OVER (PARTITION BY share_code ORDER BY generated_at DESC) = 1
+        )
+        SELECT o.share_code, s.followed_times, o.legs, s.legs_with_history, v.summary,
                o.legs AS leg_count, o.first_kickoff, o.last_kickoff, o.won, o.lost,
                o.combined_odds, o.locked_in, o.pending_odds
-        FROM CORE.gold_slip_summary_ai s
-        LEFT JOIN ANALYTICS.gold_slip_overview o ON o.share_code = s.share_code
-        QUALIFY row_number() OVER (PARTITION BY s.share_code ORDER BY s.generated_at DESC) = 1
+        FROM ANALYTICS.gold_slip_overview o
+        JOIN slip s ON s.share_code = o.share_code
+        LEFT JOIN verdict v ON v.share_code = o.share_code
         ORDER BY s.followed_times DESC NULLS LAST
         """
     )

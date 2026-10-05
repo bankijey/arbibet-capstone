@@ -229,7 +229,10 @@ def _slip_cards(cards: pd.DataFrame, legs: pd.DataFrame) -> None:
             else:
                 head.badge("played · every leg has kicked off", color="grey")
             _position(head, slip, total)
-            body.write(slip.SUMMARY)
+            if isinstance(slip.SUMMARY, str) and slip.SUMMARY:
+                body.write(slip.SUMMARY)
+            else:
+                body.caption("No AI verdict for this slip. The legs and their numbers are below.")
             if rows.empty:
                 continue
             rows["form"] = [
@@ -277,9 +280,9 @@ def _slip_cards(cards: pd.DataFrame, legs: pd.DataFrame) -> None:
 def popular_slips() -> None:
     st.caption(
         "Booking slips other people copied, each leg checked against how often "
-        "that exact market has actually landed for the sides involved. The "
-        "summary is written by gpt-4o-mini from the table beside it — the numbers "
-        "are the model's input, shown so you can judge the output. Most legs land; "
+        "that exact market has actually landed for the sides involved. Where a "
+        "slip has a written summary, it was written by gpt-4o-mini from the table "
+        "beside it; new summaries are paused. Most legs land; "
         "the slip is all of them multiplied, and the price already says how often "
         "that happens. The Track record page shows the alternative construction."
     )
@@ -359,16 +362,16 @@ def popular_slips() -> None:
     with slips_up:
         if waiting:
             st.caption(
-                f"{int(waiting)} upcoming slips have no verdict yet. Sixty are written "
-                "every warm cycle, never-summarised and most-copied first."
+                f"{int(waiting)} upcoming slips have no written verdict: AI summaries are "
+                "paused, so they show their legs and numbers only."
             )
         if shown_up.empty:
-            st.info("No upcoming slip has a verdict yet.")
+            st.info("No upcoming slips.")
         else:
             _slip_cards(shown_up, legs)
     with slips_played:
         if shown_played.empty:
-            st.info("No played slips with a verdict.")
+            st.info("No played slips.")
         else:
             _slip_cards(shown_played, legs)
 

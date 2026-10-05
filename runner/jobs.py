@@ -139,6 +139,30 @@ def dbt(*args: str) -> Callable[[Run], None]:
     return job
 
 
+# Every job that calls OpenAI: the pre-match briefs, the slip verdicts and the
+# post-match notes. Off unless AI_SUMMARIES=1 -- paused on 2026-10-05 to stop
+# the spend. Off, each still appears in ops.job_run as skipped, with the reason,
+# so the health page shows it was paused rather than failing. What they wrote
+# before stays in the warehouse and keeps being published.
+AI_JOBS = {"brief_fixtures", "summarise_upcoming", "summarise_results", "summarise_played"}
+
+
+def ai_enabled() -> bool:
+    return os.environ.get("AI_SUMMARIES", "0") == "1"
+
+
+def _paused(name: str, fn: Callable[[Run], None]) -> Callable[[Run], None]:
+    def job(run: Run) -> None:
+        if not ai_enabled():
+            run.skipped = True
+            run.detail["reason"] = "AI summaries paused (AI_SUMMARIES is not 1)"
+            return
+        fn(run)
+
+    job.__name__ = name
+    return job
+
+
 def publish(warehouse: Warehouse, full: bool = False) -> Callable[[Run], None]:
     def job(run: Run) -> None:
         from runner import serve
@@ -271,7 +295,19 @@ class Job:
     every: timedelta | None = None
 
 
+def _gate(jobs: list[Job]) -> list[Job]:
+    return [Job(j.name, _paused(j.name, j.fn), j.every) if j.name in AI_JOBS else j for j in jobs]
+
+
 def warm_jobs(warehouse: Warehouse) -> list[Job]:
+    return _gate(_warm_jobs(warehouse))
+
+
+def cold_jobs(warehouse: Warehouse, observer: Observer) -> list[Job]:
+    return _gate(_cold_jobs(warehouse, observer))
+
+
+def _warm_jobs(warehouse: Warehouse) -> list[Job]:
     return [
         Job("load_dims", script("snowflake/load_dims.py", 7.0, 7.0), every=timedelta(hours=1)),
         Job("verify_fixtures", verify_fixtures(warehouse)),
@@ -300,7 +336,7 @@ def warm_jobs(warehouse: Warehouse) -> list[Job]:
     ]
 
 
-def cold_jobs(warehouse: Warehouse, observer: Observer) -> list[Job]:
+def _cold_jobs(warehouse: Warehouse, observer: Observer) -> list[Job]:
     return [
         Job("flatten", script("spark/flatten.py", env={"FLATTEN_SINCE_DAYS": "3"})),
         Job("settle", script("spark/settle.py")),
