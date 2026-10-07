@@ -38,6 +38,7 @@ from typing import Any
 
 from arbibet_capstone.warehouse import Warehouse
 from runner.telegram import render
+from runner.telegram.alerts import ev_alerts_enabled
 from runner.telegram.api import TelegramAPI, TelegramError
 from runner.telegram.model import Leg as OppLeg
 from runner.telegram.model import Opportunity, Subscriber
@@ -241,8 +242,13 @@ class Bot(threading.Thread):
         self.api.send(
             chat_id,
             HELP
-            + f"\n\n✅ Subscribed. Surebet alerts {'on' if subscriber.surebets else 'off'}, EV "
-            f"alerts at {subscriber.ev_min:.3f} and above. /settings to change.\n"
+            + f"\n\n✅ Subscribed. Surebet alerts {'on' if subscriber.surebets else 'off'}"
+            + (
+                f", EV alerts at {subscriber.ev_min:.3f} and above"
+                if ev_alerts_enabled()
+                else " (only surebets are alerted; /ev lists EV prices on request)"
+            )
+            + ". /settings to change.\n"
             "Tell me your cash at each book (<code>/balance msport 50000</code>) and every "
             "alert arrives with stakes sized to it.",
         )
@@ -850,7 +856,7 @@ class Bot(threading.Thread):
         updates: dict[str, Any] = {}
         if change == "surebets":
             updates["surebets"] = not subscriber.surebets
-        elif change == "ev":
+        elif change == "ev" and ev_alerts_enabled():
             updates["ev"] = not subscriber.ev
         elif change == "ev_down":
             updates["ev_min"] = max(0.01, round(subscriber.ev_min - 0.005, 3))
@@ -866,15 +872,17 @@ class Bot(threading.Thread):
             subscriber = self.store.update(chat_id, **updates) or subscriber
             self.on_subscribers_changed()
         muted = subscriber.muted(now)
-        text = (
-            "⚙️ <b>Settings</b>\n\n"
-            f"Alerts: <b>{'on' if subscriber.active else 'off'}</b>"
-            + (f" · muted until {render.when(subscriber.muted_until)}" if muted else "")
-            + f"\nSurebet alerts: <b>{'on' if subscriber.surebets else 'off'}</b>"
+        text = "⚙️ <b>Settings</b>\n\n" f"Alerts: <b>{'on' if subscriber.active else 'off'}</b>" + (
+            f" · muted until {render.when(subscriber.muted_until)}" if muted else ""
+        ) + f"\nSurebet alerts: <b>{'on' if subscriber.surebets else 'off'}</b>" + (
             f"\nEV alerts: <b>{'on' if subscriber.ev else 'off'}</b> at "
             f"<b>{subscriber.ev_min:.3f}</b> and above"
-            f"\nDefault stake: <b>{render.money(subscriber.stake)}</b>\n\n"
+            if ev_alerts_enabled()
+            else "\nEV alerts: <b>not sent</b> (surebets only; /ev lists them on request)"
+        ) + f"\nDefault stake: <b>{render.money(subscriber.stake)}</b>\n\n" + (
             "Set exactly: <code>/settings ev 0.02</code> · <code>/settings stake 50</code>"
+            if ev_alerts_enabled()
+            else "Set exactly: <code>/settings stake 50</code>"
         )
         put = self.callbacks.put
         keyboard = [
@@ -888,12 +896,24 @@ class Bot(threading.Thread):
                 button(
                     f"Surebets {'✅' if subscriber.surebets else '❌'}", put("settings", "surebets")
                 ),
-                button(f"EV {'✅' if subscriber.ev else '❌'}", put("settings", "ev")),
-            ],
+            ]
+            + (
+                [button(f"EV {'✅' if subscriber.ev else '❌'}", put("settings", "ev"))]
+                if ev_alerts_enabled()
+                else []
+            ),
+        ]
+        +(
             [
-                button("EV −0.005", put("settings", "ev_down")),
-                button("EV +0.005", put("settings", "ev_up")),
-            ],
+                [
+                    button("EV −0.005", put("settings", "ev_down")),
+                    button("EV +0.005", put("settings", "ev_up")),
+                ]
+            ]
+            if ev_alerts_enabled()
+            else []
+        )
+        +[
             [
                 button("Unmute", put("settings", "unmute"))
                 if muted

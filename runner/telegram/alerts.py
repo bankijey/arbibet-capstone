@@ -46,6 +46,14 @@ log = logging.getLogger("runner.telegram.alerts")
 # An EV this large is a mis-mapped or mispriced market, not an edge: the
 # published EV list's top rows (+180% on odd/even) are exactly that.
 EV_ALERT_MAX = float(os.environ.get("TELEGRAM_EV_MAX", "0.5"))
+
+
+def ev_alerts_enabled() -> bool:
+    """Whether EV opportunities are pushed at all. Off by default since
+    2026-10-07: only surebets are alerted. /ev still lists them on request."""
+    return os.environ.get("TELEGRAM_EV_ALERTS", "0") == "1"
+
+
 NAMES_TTL = 600.0
 SUBSCRIBERS_TTL = 30.0
 
@@ -91,6 +99,8 @@ class Alerter(threading.Thread):
         lag is measured from there, like the hot loop's own latency. (From the
         book's fire_time it would include the collectors' delay in writing.)
         """
+        if not ev_alerts_enabled():
+            ev = []
         if not any(r.get("arbitrage", 0) > 1 for r in arb) and not ev:
             return
         try:
@@ -288,6 +298,8 @@ class Alerter(threading.Thread):
         sent = 0
         links: dict[str, str] | None = None
         for opp in self.opportunities(fixture, snapshot, arb, ev):
+            if opp.kind == "ev" and not ev_alerts_enabled():
+                continue
             if not eligible(opp, now, flagged, EV_ALERT_MAX):
                 continue
             due = recipients(opp, subscribers, self.ledger, now)

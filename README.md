@@ -260,10 +260,11 @@ Two threads inside the runner (`runner/telegram/`). Alerts are handed over
 in-process by the hot loop, so they leave seconds after a price; commands read
 the same Supabase documents as the dashboard and never touch DuckDB.
 
-- **Alerts:** a true surebet (arbitrage above 1, legs within five minutes), or
-  EV at or above the subscriber's threshold (default 0.015), before kick-off,
-  never on a flagged leg or fixture. Sent once per market or outcome, and
-  again only if the value improves by 0.005 (surebet) or 0.02 (EV).
+- **Alerts:** surebets only -- a true surebet (arbitrage above 1, legs within
+  five minutes), before kick-off, never on a flagged leg or fixture. Sent once
+  per market, and again only if it improves by 0.005. EV alerts are off since
+  7 October 2026 (`TELEGRAM_EV_ALERTS=1` brings them back, at each
+  subscriber's threshold); `/ev` still lists EV prices on request.
 - **Each leg shows what its book lists.** Under every leg is the teams and
   competition that bookmaker itself files the fixture under, marked ✅ (names
   match the fixture), ⚠️ (they do not) or ❔ (the book names none) and linked
